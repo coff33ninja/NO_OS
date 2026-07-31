@@ -43,8 +43,10 @@ spec -> implement -> boot-test -> commit.
 
 ## M3 — User mode & multitasking
 _(CLI-first foundation: sandboxed NOC processes are what make self-evolution safe)_
-- [ ] User-mode NOC processes, syscall gate
-- [ ] Preemptive PIT scheduling
+- [ ] M3 spec written (`docs/M3-USERMODE.md`)
+- [ ] User-mode NOC processes, syscall gate (`int 0x80`)
+- [ ] Preemptive PIT scheduling (frame-swap context switch, round-robin)
+- [ ] REPL stays alive as a kernel task while user processes run
 - [ ] Accept: two NOC scripts preemptively interleave
 
 ## M4 — Filesystem

@@ -38,9 +38,9 @@ This document is the canonical spec. Milestone definitions live in
 
 | Area | Decision |
 |---|---|
-| Privilege | Everything in ring 0 until the user-mode milestone (M4). |
+| Privilege | Everything in ring 0 until the user-mode milestone (M3). |
 | Memory | Identity-mapped 2 MiB pages at boot; proper frame allocator + heap in M1. |
-| Multitasking | Cooperative in early milestones; preemptive (PIT-driven) at M4. |
+| Multitasking | Cooperative in early milestones; preemptive (PIT-driven) at M3. |
 | Interrupts | GDT/IDT/PIC from M1; fault handlers log and halt cleanly. |
 | Language | C for the kernel substrate; NOC (custom) for shell and apps. |
 | Kernel object | ELF64 freestanding, linked at 1 MiB, multiboot header first. |
