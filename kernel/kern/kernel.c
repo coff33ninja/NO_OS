@@ -11,6 +11,7 @@
 #include "pmm.h"
 #include "heap.h"
 #include "prompt.h"
+#include "noc.h"
 
 static void heap_test(void)
 {
@@ -105,6 +106,9 @@ void kmain(u32 mb_info)
     pmm_init(mb_info);
     heap_test();
 
+    noc_init();
+    noc_selftest();
+
     __asm__ volatile("sti");
 
     u64 t0 = pit_ticks();
@@ -114,7 +118,7 @@ void kmain(u32 mb_info)
 
     kbd_echo_test();
 
-    prompt_main();
+    noc_repl();
 
     for (;;)
         __asm__ volatile("hlt");

@@ -48,6 +48,12 @@ $csrcs = @(
     'kern\printk.c'
     'kern\string.c'
     'kern\prompt.c'
+    'kern\line.c'
+    'noc\lexer.c'
+    'noc\parser.c'
+    'noc\compiler.c'
+    'noc\vm.c'
+    'noc\repl.c'
     'mm\pmm.c'
     'mm\heap.c'
     'arch\x86_64\gdt.c'
@@ -121,10 +127,44 @@ function Invoke-Test {
         $sw = [System.IO.StreamWriter]::new($stream)
         $sw.AutoFlush = $true
         foreach ($ch in $text.ToCharArray()) {
-            $name = switch ($ch) {
+            $name = switch -Exact ($ch.ToString()) {
                 ' ' { 'spc' }
                 "`n" { 'ret' }
-                default { $ch.ToString() }
+                '+' { 'shift-equal' }
+                '-' { 'minus' }
+                ';' { 'semicolon' }
+                ',' { 'comma' }
+                '.' { 'period' }
+                '/' { 'slash' }
+                '(' { 'shift-9' }
+                ')' { 'shift-0' }
+                '*' { 'shift-8' }
+                '"' { 'shift-apostrophe' }
+                '%' { 'shift-5' }
+                '=' { 'equal' }
+                '{' { 'shift-bracket_left' }
+                '}' { 'shift-bracket_right' }
+                '[' { 'bracket_left' }
+                ']' { 'bracket_right' }
+                '<' { 'shift-comma' }
+                '>' { 'shift-period' }
+                '!' { 'shift-1' }
+                '?' { 'shift-slash' }
+                '_' { 'shift-minus' }
+                ':' { 'shift-semicolon' }
+                '&' { 'shift-7' }
+                '|' { 'shift-backslash' }
+                '^' { 'shift-6' }
+                '~' { 'shift-grave_accent' }
+                '#' { 'shift-3' }
+                '@' { 'shift-2' }
+                '$' { 'shift-4' }
+                "'" { 'apostrophe' }
+                default {
+                    $c = $ch.ToString()
+                    if ($c -cmatch '[A-Z]') { "shift-$($c.ToLower())" }
+                    else { $c }
+                }
             }
             $sw.Write("sendkey $name`n")
             Start-Sleep -Milliseconds 150
@@ -186,6 +226,45 @@ function Invoke-Test {
         Send-Keys "echo hello`n"
         if (-not (Wait-LogPattern "`nhello`n")) {
             throw 'echo output missing'
+        }
+
+        # NOC boot self-test (compiler + VM exercised at boot).
+        if (-not (Wait-LogPattern 'noc-self-test-done')) {
+            throw 'NOC self-test did not finish'
+        }
+        if (-not (Wait-LogPattern 'NOC hello')) {
+            throw 'NOC self-test Print output missing'
+        }
+        if (-not (Wait-LogPattern "`n42`n")) {
+            throw 'NOC self-test arithmetic/function result missing'
+        }
+        # Mul2 default arg, loop, if/else, while via the boot self-test.
+        if (-not (Wait-LogPattern "`n12`n")) {
+            throw 'NOC self-test Mul2 default-arg result missing'
+        }
+        if (-not (Wait-LogPattern "`n45`n")) {
+            throw 'NOC self-test for-loop result missing'
+        }
+        if (-not (Wait-LogPattern "`n7`n")) {
+            throw 'NOC self-test precedence result missing'
+        }
+        if (-not (Wait-LogPattern "`n100`n")) {
+            throw 'NOC self-test if/else result missing'
+        }
+        if (-not (Wait-LogPattern "`n3`n")) {
+            throw 'NOC self-test while-loop result missing'
+        }
+
+        # NOC via the real REPL: last-expression result printing.
+        Send-Keys "5678+1;`n"
+        if (-not (Wait-LogPattern "`n5679`n")) {
+            throw 'NOC REPL did not print the last expression result'
+        }
+
+        # NOC via the real REPL: builtin call with computed argument.
+        Send-Keys "Print(`"%d`", 33*11);`n"
+        if (-not (Wait-LogPattern "`n363")) {
+            throw 'NOC REPL Print builtin did not run'
         }
 
         # Deliberate fault as the final check: #UD must trap, not triple-fault.

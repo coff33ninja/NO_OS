@@ -79,6 +79,11 @@ static void cmd_echo(const char *args)
 
 static void cmd_dispatch(const char *line)
 {
+    prompt_handle(line);
+}
+
+bool prompt_handle(const char *line)
+{
     const char *cmd = line;
     const char *args = line;
     while (*args && *args != ' ')
@@ -88,21 +93,28 @@ static void cmd_dispatch(const char *line)
         args++;
 
     if (clen == 0) {
-        return;
+        return true;
     } else if (clen == 4 && memcmp(cmd, "help", 4) == 0) {
         cmd_help();
+        return true;
     } else if (clen == 7 && memcmp(cmd, "version", 7) == 0) {
         cmd_version();
+        return true;
     } else if (clen == 7 && memcmp(cmd, "meminfo", 7) == 0) {
         cmd_meminfo();
+        return true;
     } else if (clen == 4 && memcmp(cmd, "echo", 4) == 0) {
         cmd_echo(args);
+        return true;
     } else if (clen == 5 && memcmp(cmd, "fault", 5) == 0) {
         cmd_fault();
+        return true;
     } else if (clen == 6 && memcmp(cmd, "reboot", 6) == 0) {
         cmd_reboot();
+        return true;
     } else {
         printk("unknown command '%s' (try 'help')\n", line);
+        return false;
     }
 }
 

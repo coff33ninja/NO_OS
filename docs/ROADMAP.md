@@ -12,20 +12,20 @@ spec -> implement -> boot-test -> commit.
       (QEMU `-kernel` refuses ELFCLASS64 multiboot images; two-stage
       link + `objcopy -O elf32-i386` reframes the container.)
 
-## M1 — Core services
-- [ ] GDT, IDT with fault handlers (log RIP/CR2, halt cleanly)
-- [ ] PIC remap, PIT 100 Hz timer
-- [ ] PS/2 keyboard driver (scancodes -> ring buffer)
-- [ ] Physical frame allocator + paging; kernel heap
-- [ ] `printk` (printf-style) to VGA + serial
-- [ ] Accept: boot to prompt, keys echo, deliberate fault shows clean trap
+## M1 — Core services (DONE)
+- [x] GDT, IDT with fault handlers (log RIP/CR2, halt cleanly)
+- [x] PIC remap, PIT 100 Hz timer
+- [x] PS/2 keyboard driver (scancodes -> ring buffer)
+- [x] Physical frame allocator + paging; kernel heap
+- [x] `printk` (printf-style) to VGA + serial
+- [x] Accept: boot to prompt, keys echo, deliberate fault shows clean trap
 
 ## M2 — NOC language (centerpiece)
-- [ ] NOC spec written
-- [ ] Lexer, parser, AST
-- [ ] Bytecode compiler + stack VM (arena memory)
-- [ ] Builtins: console, memory, keyboard, time
-- [ ] REPL is the default shell; `.noc` files run
+- [ ] NOC spec written (`docs/NOC.md`)
+- [ ] Lexer, parser, AST (arena-allocated per line)
+- [ ] Bytecode compiler + stack VM (all values 64-bit)
+- [ ] Builtins: console (`Print`/`PrintLn`), memory, keyboard, time
+- [ ] REPL is the default shell; kernel admin commands become NOC builtins
 - [ ] Accept: `Print("Hello"); 40+2;` compiles+runs; loops and default args work
 
 ## M3 — Graphics (TempleOS soul)
