@@ -19,8 +19,9 @@ typedef struct __attribute__((packed)) {
 static idt_entry_t idt[256];
 static idt_ptr_t   idt_ptr;
 
-/* 48 stubs, one per vector 0..47 (see isr.s). */
+/* 48 stubs, one per vector 0..47 (see isr.s), plus the syscall gate. */
 extern u64 isr_stub_table[48];
+extern u64 isr80;
 
 void idt_set_gate(u8 vector, u64 handler, u8 dpl)
 {
@@ -39,6 +40,8 @@ void idt_init(void)
 
     for (int i = 0; i < 48; i++)
         idt_set_gate((u8)i, isr_stub_table[i], 0);
+
+    idt_set_gate(0x80, (u64)&isr80, 3);
 
     idt_ptr.limit = sizeof(idt) - 1;
     idt_ptr.base  = (u64)&idt;

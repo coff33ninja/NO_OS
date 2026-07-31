@@ -4,12 +4,14 @@
 #include "printk.h"
 #include "string.h"
 #include "gdt.h"
+#include "tss.h"
 #include "idt.h"
 #include "pic.h"
 #include "pit.h"
 #include "kbd.h"
 #include "pmm.h"
 #include "heap.h"
+#include "sched.h"
 #include "noc.h"
 
 static void heap_test(void)
@@ -92,6 +94,7 @@ void kmain(u32 mb_info)
     vga_init();
 
     gdt_init();
+    tss_init();
     idt_init();
     pic_init();
     pit_init();
@@ -104,6 +107,8 @@ void kmain(u32 mb_info)
 
     pmm_init(mb_info);
     heap_test();
+
+    sched_init();
 
     noc_init();
     noc_selftest();

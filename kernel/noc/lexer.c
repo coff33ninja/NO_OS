@@ -1,7 +1,6 @@
 #include "noc.h"
-#include "heap.h"
 #include "string.h"
-#include "printk.h"
+#include "format.h"
 
 void *noc_arena_alloc(noc_arena *a, usize n)
 {

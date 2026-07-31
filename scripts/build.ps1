@@ -46,18 +46,25 @@ $cflags = @(
 $csrcs = @(
     'kern\kernel.c'
     'kern\printk.c'
+    'kern\format.c'
     'kern\string.c'
     'kern\line.c'
+    'kern\sched.c'
+    'kern\noc_os.c'
     'noc\lexer.c'
     'noc\parser.c'
     'noc\compiler.c'
     'noc\vm.c'
     'noc\repl.c'
+    'noc\exec.c'
     'mm\pmm.c'
     'mm\heap.c'
+    'mm\vmm.c'
     'arch\x86_64\gdt.c'
+    'arch\x86_64\tss.c'
     'arch\x86_64\idt.c'
     'arch\x86_64\isr.c'
+    'arch\x86_64\syscall.c'
     'drivers\vga.c'
     'drivers\serial.c'
     'drivers\pic.c'
@@ -65,10 +72,21 @@ $csrcs = @(
     'drivers\kbd.c'
 )
 
+# Shared NOC sources compiled into the ring-3 runtime (with -DNOOS_USER).
+$userCsrcs = @(
+    'noc\lexer.c'
+    'noc\parser.c'
+    'noc\compiler.c'
+    'noc\vm.c'
+    'noc\exec.c'
+    'kern\format.c'
+    'kern\string.c'
+)
+
 function Invoke-Build {
     New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
-    # .s files -> objects (boot.s, isr.s, ...)
+    # .s files -> objects (boot.s, isr.s, coro.s, ...)
     $objs = @()
     Get-ChildItem (Join-Path $kernelDir 'arch\x86_64') -Filter '*.s' | Sort-Object Name | ForEach-Object {
         $o = Join-Path $buildDir ($_.BaseName + '.o')
@@ -87,6 +105,50 @@ function Invoke-Build {
         if ($LASTEXITCODE -ne 0) { throw "zig cc failed on $s" }
     }
 
+    # ---- ring-3 user runtime: nocproc.bin, embedded as nocproc_blob.o ----
+    Write-Host 'build user runtime'
+    & $nasm -f elf64 (Join-Path $root 'user\ucrt0.s') -o (Join-Path $buildDir 'ucrt0.o')
+    if ($LASTEXITCODE -ne 0) { throw 'nasm failed on user\ucrt0.s' }
+
+    $userObjs = @(Join-Path $buildDir 'ucrt0.o')
+    # The user image links above 4 GiB (PML4[2]); only the large code
+    # model emits 64-bit relocations that can reach it.
+    $userCFlags = @($cflags) + @('-DNOOS_USER', '-mcmodel=large')
+    foreach ($s in $userCsrcs) {
+        $obj = Join-Path $buildDir ('user_' + (($s -replace '[\\/]', '_') -replace '\.c$', '.o'))
+        $userObjs += $obj
+        Write-Host "cc (user) $s"
+        & $zig cc @userCFlags "-I$includeDir" -c (Join-Path $kernelDir $s) -o $obj
+        if ($LASTEXITCODE -ne 0) { throw "zig cc failed on user $s" }
+    }
+    foreach ($s in @('user\noc_os.c', 'user\nocproc.c')) {
+        $obj = Join-Path $buildDir (($s -replace '[\\/]', '_') -replace '\.c$', '.o')
+        $userObjs += $obj
+        Write-Host "cc (user) $s"
+        & $zig cc @userCFlags "-I$includeDir" -c (Join-Path $root $s) -o $obj
+        if ($LASTEXITCODE -ne 0) { throw "zig cc failed on $s" }
+    }
+
+    $userLd = (Join-Path $root 'user\user.ld').Replace('\', '/')
+    & $zig cc @('-target', 'x86_64-freestanding', '-nostdlib', "-Wl,-T,$userLd", '-Wl,--gc-sections') @userObjs -o (Join-Path $buildDir 'user.elf')
+    if ($LASTEXITCODE -ne 0) { throw 'user link failed' }
+
+    $oc = Get-Command objcopy -ErrorAction SilentlyContinue
+    if (-not $oc) { throw 'objcopy not found (need binutils)' }
+
+    # Run objcopy from the build dir so the blob symbols are named after the
+    # bare file (nocproc.bin -> _binary_nocproc_bin_start/_end).
+    Push-Location $buildDir
+    try {
+        & $oc.Source -O binary user.elf nocproc.bin
+        if ($LASTEXITCODE -ne 0) { throw 'user objcopy binary failed' }
+        & $oc.Source -I binary -O elf64-x86-64 -B i386 nocproc.bin nocproc_blob.o
+        if ($LASTEXITCODE -ne 0) { throw 'user blob objcopy failed' }
+    } finally {
+        Pop-Location
+    }
+    $objs += (Join-Path $buildDir 'nocproc_blob.o')
+
     # link as 64-bit ELF (correct relocations), then reframe as 32-bit ELF.
     # QEMU's multiboot loader refuses ELFCLASS64 kernels; the 32-bit container
     # keeps the 64-bit code byte-identical. GRUB can use either one.
@@ -94,8 +156,6 @@ function Invoke-Build {
     & $zig cc @('-target', 'x86_64-freestanding', '-nostdlib', "-Wl,-T,$ldPath", '-Wl,--gc-sections') @objs -o $kernelElf64
     if ($LASTEXITCODE -ne 0) { throw 'link failed' }
 
-    $oc = Get-Command objcopy -ErrorAction SilentlyContinue
-    if (-not $oc) { throw 'objcopy not found (need binutils)' }
     & $oc.Source -O elf32-i386 $kernelElf64 $kernelElf
     if ($LASTEXITCODE -ne 0) { throw 'objcopy reframe failed' }
 
@@ -358,6 +418,42 @@ function Invoke-Test {
         $noise = Get-Log
         if ($noise -match "expected ';'" -or $noise -match 'unknown command') {
             throw 'legacy fallback noise still present in shell output'
+        }
+
+        # ---- M3: user mode & multitasking ----
+        # Demo spawns two looping ring-3 processes that print A and B every
+        # 500 ms; preemption must interleave them on the serial line.
+        Send-Keys "Demo;`n"
+        Start-Sleep -Seconds 5
+        $c = Get-Log
+        $idx = $c.IndexOf('Demo;')
+        $tail = if ($idx -ge 0) { $c.Substring($idx) } else { $c }
+        $aCount = ([regex]::Matches($tail, 'A')).Count
+        $bCount = ([regex]::Matches($tail, 'B')).Count
+        if ($aCount -lt 3 -or $bCount -lt 3) {
+            throw "demo interleaving failed: A=$aCount B=$bCount"
+        }
+        if ($tail -notmatch 'A.*B') {
+            throw 'demo: no A-then-B interleaving observed'
+        }
+        if ($tail -notmatch 'B.*A') {
+            throw 'demo: no B-then-A interleaving observed'
+        }
+
+        # REPL stays responsive while the user processes run.
+        Send-Keys "9*9;`n"
+        if (-not (Wait-LogPattern "`n81`n")) {
+            throw 'REPL did not stay responsive after spawning processes'
+        }
+
+        # Ps lists 3+ tasks (REPL + the two demo processes).
+        Send-Keys "Ps;`n"
+        Start-Sleep -Milliseconds 800
+        $c = Get-Log
+        $tasks = [regex]::Matches($c,
+            'pid\s+\d+\s+(ready|run|blocked|zombie)\s+(user|kern)')
+        if ($tasks.Count -lt 3) {
+            throw "Ps: expected 3+ tasks, saw $($tasks.Count)"
         }
 
         # Deliberate fault as the final check: #UD must trap, not triple-fault.

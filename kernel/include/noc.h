@@ -8,6 +8,10 @@ void noc_init(void);
 void noc_repl(void);
 void noc_selftest(void);
 
+/* Shared lex/parse/compile/run of one NOC chunk (exec.c). Uses only the
+   noc_os platform layer, so it works in the kernel REPL and in ring 3. */
+bool noc_exec_line(const char *line);
+
 /* ---- limits ---- */
 #define NOC_MAX_ARGS     16
 #define NOC_MAX_LOCALS   64

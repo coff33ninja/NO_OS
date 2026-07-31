@@ -32,6 +32,17 @@ isr%+i:
 %endrep
 
 ; ------------------------------------------------------------------
+; Syscall gate (int 0x80), callable from ring 3.
+; The CPU pushes ss, rsp, rflags, cs, rip (ring change), then we push the
+; dummy error code and vector like every other stub.
+; ------------------------------------------------------------------
+global isr80
+isr80:
+    push qword 0
+    push qword 0x80
+    jmp isr_common_stub
+
+; ------------------------------------------------------------------
 ; Stub address table for idt_init.
 ; ------------------------------------------------------------------
 section .data

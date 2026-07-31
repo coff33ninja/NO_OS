@@ -2,6 +2,7 @@
 #include "io.h"
 #include "isr.h"
 #include "pic.h"
+#include "sched.h"
 
 #define KBD_DATA 0x60
 #define BUF_SIZE 256
@@ -121,6 +122,7 @@ static void kbd_handler(struct regs *r)
         c = (char)(c - 'a' + 1);        /* Ctrl+A..Z -> control codes 1..26 */
     if (c)
         kbd_push(c);
+    sched_on_key();
     pic_eoi(1);
 }
 
@@ -156,7 +158,9 @@ int kbd_peekc(void)
 int kbd_readc(void)
 {
     int c;
-    while ((c = kbd_getc()) < 0)
+    while ((c = kbd_getc()) < 0) {
+        sched_yield_to_user(); /* let user tasks run while the shell waits */
         __asm__ volatile("sti; hlt");
+    }
     return c;
 }

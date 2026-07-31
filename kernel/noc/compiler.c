@@ -1,7 +1,7 @@
 #include "noc.h"
-#include "heap.h"
+#include "noc_os.h"
 #include "string.h"
-#include "printk.h"
+#include "format.h"
 
 /* Unary operator codes (must match parser.c) */
 #define UNOP_NEG   100
@@ -55,14 +55,14 @@ static bool buf_ensure(ccomp *c, usize extra)
     usize ncap = c->code.cap ? c->code.cap * 2 : 1024;
     while (ncap < c->code.len + extra)
         ncap *= 2;
-    u8 *nd = kmalloc(ncap);
+    u8 *nd = noc_os_alloc(ncap);
     if (!nd) {
         cerr(c, "out of memory (code buffer)");
         return false;
     }
     if (c->code.data) {
         memcpy(nd, c->code.data, c->code.len);
-        kfree(c->code.data);
+        noc_os_free(c->code.data);
     }
     c->code.data = nd;
     c->code.cap = ncap;
@@ -145,7 +145,7 @@ static i32 add_string(ccomp *c, const char *s)
         return -1;
     }
     usize len = strlen(s);
-    char *copy = kmalloc(len + 1);
+    char *copy = noc_os_alloc(len + 1);
     if (!copy) {
         cerr(c, "out of memory (string constant)");
         return -1;
@@ -614,10 +614,10 @@ static bool compile_stmt(ccomp *c, const ast *n, bool last)
 static void free_sub_resources(noc_fn *nf, ccomp *sub)
 {
     if (sub->code.data)
-        kfree(sub->code.data);
+        noc_os_free(sub->code.data);
     for (usize i = 0; i < nf->nstrings; i++) {
         if (nf->strings[i])
-            kfree(nf->strings[i]);
+            noc_os_free(nf->strings[i]);
     }
     nf->nstrings = 0;
 }
@@ -629,7 +629,7 @@ static bool compile_funcdecl(ccomp *c, const ast *fn)
         return false;
     }
 
-    noc_fn *nf = kmalloc(sizeof(noc_fn));
+    noc_fn *nf = noc_os_alloc(sizeof(noc_fn));
     if (!nf) {
         cerr(c, "out of memory (function)");
         return false;
@@ -638,9 +638,9 @@ static bool compile_funcdecl(ccomp *c, const ast *fn)
     nf->builtin = -1;
 
     usize len = strlen(fn->name);
-    char *nm = kmalloc(len + 1);
+    char *nm = noc_os_alloc(len + 1);
     if (!nm) {
-        kfree(nf);
+        noc_os_free(nf);
         cerr(c, "out of memory (function name)");
         return false;
     }
@@ -675,8 +675,8 @@ static bool compile_funcdecl(ccomp *c, const ast *fn)
         for (u32 i = 0; i < fn->body->nargs; i++) {
             if (!compile_stmt(&sub, fn->body->args[i], false)) {
                 free_sub_resources(nf, &sub);
-                kfree(nf->name);
-                kfree(nf);
+                noc_os_free(nf->name);
+                noc_os_free(nf);
                 return false;
             }
         }
@@ -695,8 +695,8 @@ static bool compile_funcdecl(ccomp *c, const ast *fn)
 
 fail:
     free_sub_resources(nf, &sub);
-    kfree(nf->name);
-    kfree(nf);
+    noc_os_free(nf->name);
+    noc_os_free(nf);
     return false;
 }
 
@@ -743,11 +743,11 @@ bool noc_compile(ast *stmts, usize nstmt, noc_arena *a, noc_fn *chunk,
 
 fail:
     if (c.code.data)
-        kfree(c.code.data);
+        noc_os_free(c.code.data);
     c.code.data = NULL;
     for (usize i = 0; i < chunk->nstrings; i++) {
         if (chunk->strings[i])
-            kfree(chunk->strings[i]);
+            noc_os_free(chunk->strings[i]);
     }
     chunk->nstrings = 0;
     return false;

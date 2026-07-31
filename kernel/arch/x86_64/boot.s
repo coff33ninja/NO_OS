@@ -27,6 +27,7 @@ stack_bottom:
 stack_top:
 
 align 4096
+global pml4
 pml4:
     resb 4096
 pdpt:

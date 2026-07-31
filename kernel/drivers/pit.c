@@ -2,6 +2,7 @@
 #include "io.h"
 #include "isr.h"
 #include "pic.h"
+#include "sched.h"
 
 #define PIT_CMD  0x43
 #define PIT_CH0  0x40
@@ -15,6 +16,7 @@ static void pit_handler(struct regs *r)
 {
     (void)r;
     ticks++;
+    sched_on_tick(r);
     pic_eoi(0);
 }
 

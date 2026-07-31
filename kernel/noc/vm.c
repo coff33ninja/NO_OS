@@ -1,10 +1,13 @@
 #include "noc.h"
-#include "heap.h"
 #include "string.h"
-#include "printk.h"
-#include "kbd.h"
-#include "pit.h"
+#include "format.h"
+#include "noc_os.h"
+
+#ifndef NOOS_USER
+#include "sched.h"
 #include "pmm.h"
+#include "heap.h"
+#endif
 
 #define NOC_STACK_SIZE 4096
 #define NOC_MAX_FRAMES 256
@@ -29,14 +32,14 @@ noc_fn *noc_register_user_fn(noc_fn *f)
         if (strcmp(noc_funcs[i]->name, f->name) == 0) {
             noc_fn *old = noc_funcs[i];
             if (old->code)
-                kfree(old->code);
+                noc_os_free(old->code);
             for (usize k = 0; k < old->nstrings; k++) {
                 if (old->strings[k])
-                    kfree(old->strings[k]);
+                    noc_os_free(old->strings[k]);
             }
             if (old->name)
-                kfree(old->name);
-            kfree(old);
+                noc_os_free(old->name);
+            noc_os_free(old);
             noc_funcs[i] = f;
             return f;
         }
@@ -50,15 +53,15 @@ noc_fn *noc_register_user_fn(noc_fn *f)
 noc_fn *noc_register_builtin(const char *name, u32 ret_type, u32 nargs,
                              u8 variadic, i32 builtin_index)
 {
-    noc_fn *f = kmalloc(sizeof(noc_fn));
+    noc_fn *f = noc_os_alloc(sizeof(noc_fn));
     if (!f)
         return NULL;
     memset(f, 0, sizeof(noc_fn));
 
     usize len = strlen(name);
-    char *nm = kmalloc(len + 1);
+    char *nm = noc_os_alloc(len + 1);
     if (!nm) {
-        kfree(f);
+        noc_os_free(f);
         return NULL;
     }
     memcpy(nm, name, len + 1);
@@ -136,9 +139,9 @@ static bool run_loop(void)
     while (nframes > 0) {
         /* Break out of runaway programs: Esc / Ctrl+C aborts the run. */
         if ((iters++ & 0xFF) == 0) {
-            int c = kbd_peekc();
+            int c = noc_os_kbd_peek();
             if (c == 0x1B || c == 0x03) {
-                kbd_getc(); /* consume */
+                noc_os_kbd_poll(); /* consume */
                 vmerr("interrupted");
                 return false;
             }
@@ -552,7 +555,7 @@ static bool b_Print(void *vm, u64 *args, usize n, u64 *ret)
         return false;
     char buf[512];
     noc_format(buf, sizeof(buf), (const char *)args[0], args + 1, n - 1);
-    printk("%s", buf);
+    noc_os_puts(buf);
     *ret = 0;
     return true;
 }
@@ -564,7 +567,8 @@ static bool b_PrintLn(void *vm, u64 *args, usize n, u64 *ret)
         return false;
     char buf[512];
     noc_format(buf, sizeof(buf), (const char *)args[0], args + 1, n - 1);
-    printk("%s\n", buf);
+    noc_os_puts(buf);
+    noc_os_putc('\n');
     *ret = 0;
     return true;
 }
@@ -574,7 +578,7 @@ static bool b_Time(void *vm, u64 *args, usize n, u64 *ret)
     (void)vm;
     (void)args;
     (void)n;
-    *ret = (u64)pit_ticks() * 10; /* PIT is 100 Hz -> 10 ms per tick */
+    *ret = noc_os_ticks() * 10; /* PIT is 100 Hz -> 10 ms per tick */
     return true;
 }
 
@@ -584,7 +588,7 @@ static bool b_Sleep(void *vm, u64 *args, usize n, u64 *ret)
     (void)ret;
     if (n < 1)
         return false;
-    pit_sleep((usize)args[0]);
+    noc_os_sleep((usize)args[0]);
     return true;
 }
 
@@ -593,7 +597,7 @@ static bool b_KeyGet(void *vm, u64 *args, usize n, u64 *ret)
     (void)vm;
     (void)args;
     (void)n;
-    *ret = (u64)kbd_readc();
+    *ret = (u64)noc_os_kbd_wait();
     return true;
 }
 
@@ -602,7 +606,7 @@ static bool b_KeyPressed(void *vm, u64 *args, usize n, u64 *ret)
     (void)vm;
     (void)args;
     (void)n;
-    *ret = kbd_avail() ? 1 : 0;
+    *ret = (noc_os_kbd_peek() >= 0) ? 1 : 0;
     return true;
 }
 
@@ -611,7 +615,7 @@ static bool b_Alloc(void *vm, u64 *args, usize n, u64 *ret)
     (void)vm;
     if (n < 1)
         return false;
-    *ret = (u64)kmalloc((usize)args[0]);
+    *ret = (u64)noc_os_alloc((usize)args[0]);
     return true;
 }
 
@@ -621,7 +625,7 @@ static bool b_Free(void *vm, u64 *args, usize n, u64 *ret)
     (void)ret;
     if (n < 1)
         return false;
-    kfree((void *)args[0]);
+    noc_os_free((void *)args[0]);
     return true;
 }
 
@@ -659,12 +663,14 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
     (void)vm;
     (void)args;
     (void)n;
-    printk("commands: Help, Version, MemInfo, Echo, FaultTest, Reboot, "
-           "Print, PrintLn, Sleep, Time, KeyGet, KeyPressed, Alloc, Free, "
-           "MemSet, MemCpy, Len\n");
+    noc_os_puts("commands: Help, Version, MemInfo, Echo, FaultTest, Reboot, "
+                "Print, PrintLn, Sleep, Time, KeyGet, KeyPressed, Alloc, Free, "
+                "MemSet, MemCpy, Len, Spawn, Ps, Demo\n");
     *ret = 0;
     return true;
 }
+
+#ifndef NOOS_USER
 
 static bool b_Echo(void *vm, u64 *args, usize n, u64 *ret)
 {
@@ -672,7 +678,10 @@ static bool b_Echo(void *vm, u64 *args, usize n, u64 *ret)
     (void)ret;
     if (n < 1)
         return false;
-    printk("%s\n", (const char *)args[0]);
+    char buf[512];
+    noc_format(buf, sizeof(buf), (const char *)args[0], args + 1, n - 1);
+    noc_os_puts(buf);
+    noc_os_putc('\n');
     return true;
 }
 
@@ -681,7 +690,7 @@ static bool b_Version(void *vm, u64 *args, usize n, u64 *ret)
     (void)vm;
     (void)args;
     (void)n;
-    printk("kernel version: NO_OS v0.1\n");
+    noc_os_puts("kernel version: NO_OS v0.1\n");
     *ret = 0;
     return true;
 }
@@ -695,10 +704,14 @@ static bool b_MemInfo(void *vm, u64 *args, usize n, u64 *ret)
     u64 avail = pmm_avail_frames();
     u64 free_mib = avail * FRAME_SIZE / 0x100000;
     u64 tot_mib  = total * FRAME_SIZE / 0x100000;
-    printk("mem: %u MiB free of %u MiB total (%u frames)\n",
-           (unsigned)free_mib, (unsigned)tot_mib, (unsigned)avail);
-    printk("heap: %u bytes used in %u blocks\n",
-           (unsigned)heap_used_bytes(), (unsigned)heap_blocks());
+    char buf[256];
+    sprintk(buf, sizeof(buf),
+            "mem: %u MiB free of %u MiB total (%u frames)\n",
+            (unsigned)free_mib, (unsigned)tot_mib, (unsigned)avail);
+    noc_os_puts(buf);
+    sprintk(buf, sizeof(buf), "heap: %u bytes used in %u blocks\n",
+            (unsigned)heap_used_bytes(), (unsigned)heap_blocks());
+    noc_os_puts(buf);
     *ret = 0;
     return true;
 }
@@ -709,7 +722,7 @@ static bool b_FaultTest(void *vm, u64 *args, usize n, u64 *ret)
     (void)args;
     (void)n;
     (void)ret;
-    printk("triggering deliberate #UD (invalid opcode)\n");
+    noc_os_puts("triggering deliberate #UD (invalid opcode)\n");
     __asm__ volatile("ud2");
     *ret = 0;
     return true;
@@ -721,7 +734,7 @@ static bool b_Reboot(void *vm, u64 *args, usize n, u64 *ret)
     (void)args;
     (void)n;
     (void)ret;
-    printk("rebooting...\n");
+    noc_os_puts("rebooting...\n");
     __asm__ volatile("cli");
     __asm__ volatile("outb %%al, $0x64" :: "a"((u8)0xFE));
     for (;;)
@@ -729,6 +742,53 @@ static bool b_Reboot(void *vm, u64 *args, usize n, u64 *ret)
     *ret = 0;
     return true;
 }
+
+static bool b_Spawn(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    *ret = (u64)sched_spawn((const char *)args[0], "user");
+    return true;
+}
+
+static bool b_Ps(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    sched_ps();
+    *ret = 0;
+    return true;
+}
+
+static bool b_Demo(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    char *pa = noc_os_alloc(256);
+    char *pb = noc_os_alloc(256);
+    if (!pa || !pb) {
+        if (pa)
+            noc_os_free(pa);
+        if (pb)
+            noc_os_free(pb);
+        *ret = (u64)-1;
+        return true;
+    }
+    sprintk(pa, 256, "I64 a=0; while (1) { Print(\"A\\n\"); Sleep(500); a++; }");
+    sprintk(pb, 256, "I64 b=0; while (1) { Print(\"B\\n\"); Sleep(500); b++; }");
+    i64 ida = sched_spawn(pa, "dema");
+    i64 idb = sched_spawn(pb, "demb");
+    noc_os_free(pa);
+    noc_os_free(pb);
+    *ret = (u64)ida;
+    (void)idb;
+    return true;
+}
+
+#endif /* !NOOS_USER */
 
 const noc_builtin noc_builtins[] = {
     { "Print",      NTYPE_VOID, 1, true,  b_Print },
@@ -743,11 +803,16 @@ const noc_builtin noc_builtins[] = {
     { "MemCpy",     NTYPE_VOID, 3, false, b_MemCpy },
     { "Len",        NTYPE_I64,  1, false, b_Len },
     { "Help",       NTYPE_VOID, 0, false, b_Help },
+#ifndef NOOS_USER
     { "Echo",       NTYPE_VOID, 1, false, b_Echo },
     { "Version",    NTYPE_VOID, 0, false, b_Version },
     { "MemInfo",    NTYPE_VOID, 0, false, b_MemInfo },
     { "FaultTest",  NTYPE_VOID, 0, false, b_FaultTest },
     { "Reboot",     NTYPE_VOID, 0, false, b_Reboot },
+    { "Spawn",      NTYPE_I64,  1, false, b_Spawn },
+    { "Ps",         NTYPE_VOID, 0, false, b_Ps },
+    { "Demo",       NTYPE_VOID, 0, false, b_Demo },
+#endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);
 
