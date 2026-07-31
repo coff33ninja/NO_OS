@@ -12,7 +12,23 @@
 #include "pmm.h"
 #include "heap.h"
 #include "sched.h"
+#include "ide.h"
 #include "noc.h"
+
+static void disk_selftest(void)
+{
+    if (!ide_present()) {
+        printk("disk test: SKIP (no IDE drive)\n");
+        return;
+    }
+    u8 buf[SECTOR_SIZE];
+    if (ide_read_sectors(0, 1, buf) != 0) {
+        printk("disk test: FAIL (read error)\n");
+        return;
+    }
+    u16 sig = (u16)(buf[510] | (buf[511] << 8));
+    printk("disk test: ok, LBA0 sig=0x%x\n", sig);
+}
 
 static void heap_test(void)
 {
@@ -99,6 +115,7 @@ void kmain(u32 mb_info)
     pic_init();
     pit_init();
     kbd_init();
+    ide_init();
 
     printk("NO_OS v0.1\n");
     printk("multiboot info: 0x%x\n", mb_info);
@@ -107,6 +124,7 @@ void kmain(u32 mb_info)
 
     pmm_init(mb_info);
     heap_test();
+    disk_selftest();
 
     sched_init();
 

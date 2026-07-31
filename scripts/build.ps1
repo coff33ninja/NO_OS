@@ -21,6 +21,7 @@ if (-not (Test-Path $qemu)) {
 
 $kernelElf64 = Join-Path $buildDir 'kernel.elf64'
 $kernelElf   = Join-Path $buildDir 'kernel.elf'
+$diskImg     = Join-Path $buildDir 'disk.img'
 
 $cflags = @(
     '-target', 'x86_64-freestanding'
@@ -70,6 +71,7 @@ $csrcs = @(
     'drivers\pic.c'
     'drivers\pit.c'
     'drivers\kbd.c'
+    'drivers\ide.c'
 )
 
 # Shared NOC sources compiled into the ring-3 runtime (with -DNOOS_USER).
@@ -83,10 +85,23 @@ $userCsrcs = @(
     'kern\string.c'
 )
 
-function Invoke-Build {
+# Raw IDE disk image for M4. 32 MiB, zero-filled. Recreated by -Action rebuild
+# or when missing so a fresh FS can be formatted at boot.
+function Ensure-Disk {
+    param([int]$MiB = 32)
+    if (Test-Path $diskImg) { return }
     New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+    $fs = [System.IO.File]::Open($diskImg, [System.IO.FileMode]::CreateNew)
+    try {
+        $fs.SetLength([int64]$MiB * 1MB)
+    } finally {
+        $fs.Dispose()
+    }
+    Write-Host "created $diskImg ($MiB MiB)"
+}
 
-    # .s files -> objects (boot.s, isr.s, coro.s, ...)
+function Invoke-Build {
+    New-Item -ItemType Directory -Force -Path $buildDir | Out-Null    # .s files -> objects (boot.s, isr.s, coro.s, ...)
     $objs = @()
     Get-ChildItem (Join-Path $kernelDir 'arch\x86_64') -Filter '*.s' | Sort-Object Name | ForEach-Object {
         $o = Join-Path $buildDir ($_.BaseName + '.o')
@@ -163,17 +178,21 @@ function Invoke-Build {
 }
 
 function Invoke-Run {
-    & $qemu -kernel $kernelElf -m 64M -serial stdio -no-reboot
+    Ensure-Disk
+    & $qemu -kernel $kernelElf -m 64M -serial stdio -no-reboot `
+        -drive file=$diskImg,format=raw,if=ide
 }
 
 function Invoke-Test {
     $log = Join-Path $buildDir 'boot-test.log'
     Remove-Item -Force $log -ErrorAction SilentlyContinue
 
+    Ensure-Disk
     $monPort = 4444
     $p = Start-Process -FilePath $qemu -ArgumentList @(
         '-kernel', $kernelElf, '-m', '64M',
         '-display', 'none',
+        '-drive', "file=$diskImg,format=raw,if=ide",
         '-serial', "file:$log",
         '-monitor', "tcp:127.0.0.1:$monPort,server,nowait",
         '-no-reboot'
@@ -304,6 +323,12 @@ function Invoke-Test {
             $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
             Write-Host $content
             throw 'timeout waiting for keyboard echo prompt'
+        }
+        # M4: IDE drive detected and LBA0 read back.
+        if (-not (Wait-LogPattern 'disk test: ok, LBA0 sig=0x')) {
+            $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
+            Write-Host $content
+            throw 'IDE disk self-test did not pass'
         }
         Send-Keys "ok`n`n"
         if (-not (Wait-LogPattern 'boot-test-ok')) {
