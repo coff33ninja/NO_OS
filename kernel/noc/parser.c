@@ -47,6 +47,18 @@ static bool expect(parser *p, tok_t t, const char *what)
     return false;
 }
 
+/* Statement terminator. A ';' is normally required, but the trailing
+   statement of a whole line may omit it (REPL nicety: `version`). */
+static bool semi_ok(parser *p)
+{
+    if (accept(p, T_SEMI))
+        return true;
+    if (check(p, T_EOF))
+        return true;
+    perr(p, "expected ';'");
+    return false;
+}
+
 static ast *new_ast(parser *p, ast_t kind)
 {
     ast *n = noc_arena_alloc(p->a, sizeof(ast));
@@ -506,7 +518,7 @@ static ast *parse_stmt(parser *p)
             if (!n->a)
                 return NULL;
         }
-        if (!expect(p, T_SEMI, "expected ';'"))
+        if (!semi_ok(p))
             return NULL;
         return n;
     }
@@ -626,7 +638,7 @@ static ast *parse_stmt(parser *p)
             if (!n->a)
                 return NULL;
         }
-        if (!expect(p, T_SEMI, "expected ';'"))
+        if (!semi_ok(p))
             return NULL;
         return n;
     }
@@ -642,7 +654,7 @@ static ast *parse_stmt(parser *p)
         n->a = parse_expr(p);
         if (!n->a)
             return NULL;
-        if (!expect(p, T_SEMI, "expected ';'"))
+        if (!semi_ok(p))
             return NULL;
         return n;
     }

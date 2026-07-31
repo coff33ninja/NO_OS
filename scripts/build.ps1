@@ -47,7 +47,6 @@ $csrcs = @(
     'kern\kernel.c'
     'kern\printk.c'
     'kern\string.c'
-    'kern\prompt.c'
     'kern\line.c'
     'noc\lexer.c'
     'noc\parser.c'
@@ -169,7 +168,59 @@ function Invoke-Test {
             $sw.Write("sendkey $name`n")
             Start-Sleep -Milliseconds 150
         }
+        Start-Sleep -Milliseconds 300
         $client.Close()
+    }
+
+    function Send-Monitor {
+        param([string]$command)
+        $client = [System.Net.Sockets.TcpClient]::new('127.0.0.1', $monPort)
+        $stream = $client.GetStream()
+        $sw = [System.IO.StreamWriter]::new($stream)
+        $sw.AutoFlush = $true
+        $sw.Write($command)
+        # Let QEMU consume the command before closing; closing with unread
+        # monitor data (the greeting) can send a TCP RST that drops it.
+        Start-Sleep -Milliseconds 300
+        $client.Close()
+    }
+
+    # Send QEMU monitor sendkey commands by key name, spaced out like
+    # Send-Keys. Bursting multiple sendkeys on one connection drops keys;
+    # spacing them (and settling before close) makes delivery reliable.
+    function Send-KeySeq {
+        param([string[]]$keys)
+        $client = [System.Net.Sockets.TcpClient]::new('127.0.0.1', $monPort)
+        $stream = $client.GetStream()
+        $sw = [System.IO.StreamWriter]::new($stream)
+        $sw.AutoFlush = $true
+        foreach ($k in $keys) {
+            $sw.Write("sendkey $k`n")
+            Start-Sleep -Milliseconds 150
+        }
+        Start-Sleep -Milliseconds 300
+        $client.Close()
+    }
+
+    function Get-Log {
+        $c = Get-Content -Raw $log -ErrorAction SilentlyContinue
+        if ($c) { $c = $c -replace "`r`n", "`n" }
+        return $c
+    }
+
+    function Wait-LogCount {
+        param([string]$pattern, [int]$want, [int]$timeoutSec = 10)
+        $deadline = (Get-Date).AddSeconds($timeoutSec)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 200
+            if ($p.HasExited) { break }
+            $c = Get-Log
+            if ($c) {
+                $m = [regex]::Matches($c, $pattern)
+                if ($m.Count -ge $want) { return $true }
+            }
+        }
+        return $false
     }
 
     function Wait-LogPattern {
@@ -207,26 +258,6 @@ function Invoke-Test {
             Write-Host $content
             throw 'prompt did not appear'
         }
-        Send-Keys "version`n"
-        if (-not (Wait-LogPattern 'kernel version: NO_OS v0.1')) {
-            throw 'version output missing'
-        }
-        Send-Keys "meminfo`n"
-        if (-not (Wait-LogPattern 'mem: \d+ MiB free of \d+ MiB')) {
-            throw 'meminfo output missing'
-        }
-        Send-Keys "help`n"
-        if (-not (Wait-LogPattern 'commands: help, version, meminfo')) {
-            throw 'help output missing'
-        }
-        Send-Keys "bogus`n"
-        if (-not (Wait-LogPattern "unknown command 'bogus'")) {
-            throw 'unknown-command handling missing'
-        }
-        Send-Keys "echo hello`n"
-        if (-not (Wait-LogPattern "`nhello`n")) {
-            throw 'echo output missing'
-        }
 
         # NOC boot self-test (compiler + VM exercised at boot).
         if (-not (Wait-LogPattern 'noc-self-test-done')) {
@@ -255,6 +286,29 @@ function Invoke-Test {
             throw 'NOC self-test while-loop result missing'
         }
 
+        # M2.5 shell: admin commands are pure NOC builtins via bare
+        # identifiers with an optional trailing ';' -- no legacy fallback.
+        Send-Keys "Version`n"
+        if (-not (Wait-LogPattern 'kernel version: NO_OS v0.1')) {
+            throw 'version output missing'
+        }
+        Send-Keys "MemInfo`n"
+        if (-not (Wait-LogPattern 'mem: \d+ MiB free of \d+ MiB')) {
+            throw 'meminfo output missing'
+        }
+        Send-Keys "Help`n"
+        if (-not (Wait-LogPattern 'commands: Help, Version, MemInfo')) {
+            throw 'Help output missing'
+        }
+        Send-Keys "bogus`n"
+        if (-not (Wait-LogPattern "undeclared variable 'bogus'")) {
+            throw 'unknown-command handling missing'
+        }
+        Send-Keys "Echo(`"hello`");`n"
+        if (-not (Wait-LogPattern "`nhello`n")) {
+            throw 'Echo output missing'
+        }
+
         # NOC via the real REPL: last-expression result printing.
         Send-Keys "5678+1;`n"
         if (-not (Wait-LogPattern "`n5679`n")) {
@@ -267,15 +321,54 @@ function Invoke-Test {
             throw 'NOC REPL Print builtin did not run'
         }
 
+        # Line editor history: up-arrow recalls and re-runs the last command.
+        Send-Keys "77*7;`n"
+        if (-not (Wait-LogCount '\n539\n' 1)) {
+            throw 'history base command result missing'
+        }
+        Send-KeySeq @('up', 'ret')
+        if (-not (Wait-LogCount '\n539\n' 2)) {
+            throw 'history up-arrow recall did not re-run the command'
+        }
+
+        # Line editor: Ctrl+C clears the current line back to a prompt.
+        Send-Keys "abc"
+        Send-KeySeq @('ctrl-c')
+        if (-not (Wait-LogPattern '\^C')) {
+            throw 'Ctrl+C line clear did not print ^C'
+        }
+        Send-Keys "11+11;`n"
+        if (-not (Wait-LogPattern "`n22`n")) {
+            throw 'shell did not recover after Ctrl+C'
+        }
+
+        # Interruptible VM: Esc aborts a runaway NOC program.
+        Send-Keys "while(true){}`n"
+        Start-Sleep -Milliseconds 500
+        Send-KeySeq @('esc')
+        if (-not (Wait-LogPattern 'NOC: interrupted')) {
+            throw 'Esc did not interrupt the running NOC program'
+        }
+        Send-Keys "9*9;`n"
+        if (-not (Wait-LogPattern "`n81`n")) {
+            throw 'shell did not recover after interrupt'
+        }
+
+        # No legacy fallback noise anywhere in the session.
+        $noise = Get-Log
+        if ($noise -match "expected ';'" -or $noise -match 'unknown command') {
+            throw 'legacy fallback noise still present in shell output'
+        }
+
         # Deliberate fault as the final check: #UD must trap, not triple-fault.
-        Send-Keys "fault`n"
+        Send-Keys "FaultTest`n"
         if (-not (Wait-LogPattern 'EXCEPTION: Invalid Opcode')) {
             throw 'deliberate fault was not trapped'
         }
 
         $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
         Write-Host $content
-        Write-Host 'TEST PASS: boot self-test, prompt, and fault trapping all verified'
+        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), and fault trapping all verified'
         exit 0
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }

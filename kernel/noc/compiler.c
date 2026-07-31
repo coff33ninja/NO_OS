@@ -454,8 +454,28 @@ static bool compile_stmt(ccomp *c, const ast *n, bool last)
 {
     switch (n->kind) {
     case A_STMTEXPR: {
-        bool nonvoid = expr_type(c, n->a) != NTYPE_VOID;
-        if (!compile_expr(c, n->a))
+        const ast *e = n->a;
+        /* HolyC-style: a bare identifier naming a function is a call with
+           default arguments (`version` == `Version()`). A local variable of
+           the same name wins. */
+        if (e->kind == A_VAR && resolve_var(c, e->name) < 0) {
+            noc_fn *f = noc_lookup(e->name);
+            if (f) {
+                ast call;
+                memset(&call, 0, sizeof(call));
+                call.kind = A_CALL;
+                call.name = e->name;
+                if (!compile_call(c, &call))
+                    return false;
+                if (last && !c->in_fn && f->ret_type != NTYPE_VOID) {
+                    c->fn->last_expr = 1;
+                    return true;
+                }
+                return emit1(c, OP_POP);
+            }
+        }
+        bool nonvoid = expr_type(c, e) != NTYPE_VOID;
+        if (!compile_expr(c, e))
             return false;
         if (last && nonvoid && !c->in_fn) {
             c->fn->last_expr = 1;

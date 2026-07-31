@@ -20,19 +20,33 @@ spec -> implement -> boot-test -> commit.
 - [x] `printk` (printf-style) to VGA + serial
 - [x] Accept: boot to prompt, keys echo, deliberate fault shows clean trap
 
-## M2 — NOC language (centerpiece)
-- [ ] NOC spec written (`docs/NOC.md`)
-- [ ] Lexer, parser, AST (arena-allocated per line)
-- [ ] Bytecode compiler + stack VM (all values 64-bit)
-- [ ] Builtins: console (`Print`/`PrintLn`), memory, keyboard, time
-- [ ] REPL is the default shell; kernel admin commands become NOC builtins
-- [ ] Accept: `Print("Hello"); 40+2;` compiles+runs; loops and default args work
+## M2 — NOC language (centerpiece) (DONE)
+- [x] NOC spec written (`docs/NOC.md`)
+- [x] Lexer, parser, AST (arena-allocated per line)
+- [x] Bytecode compiler + stack VM (all values 64-bit)
+- [x] Builtins: console (`Print`/`PrintLn`), memory, keyboard, time
+- [x] REPL is the default shell; kernel admin commands become NOC builtins
+- [x] Accept: `Print("Hello"); 40+2;` compiles+runs; loops and default args work
 
-## M3 — Graphics (TempleOS soul)
-- [ ] VGA 640x480 16-color graphics mode
-- [ ] 2D primitives; bitmap font rendering
-- [ ] Sprites drawable from NOC source
-- [ ] Accept: a NOC program animates a moving sprite
+## M2.5 — Shell & stability (DONE)
+- [x] Drop the legacy admin prompt; admin commands are pure NOC builtins
+      (`Help`/`Version`/`MemInfo`/`Echo`/`FaultTest`/`Reboot`)
+- [x] Bare-identifier auto-call (`version` == `Version()`) and optional
+      trailing `;` on the last statement of a line
+- [x] No `NOC: expected ';'` noise for admin commands; clear errors for
+      unknown words
+- [x] Interruptible NOC execution: Esc / Ctrl+C aborts a running program
+- [x] Line editor: history (up/down), cursor (left/right/Home/End/Delete),
+      Ctrl+C/Esc clears the line
+- [x] Accept: harness drives bare commands, history recall, ctrl-c clear,
+      Esc interrupt, and shell recovery
+
+## M3 — Graphics (TempleOS soul) (deferred until shell is stable)
+- [ ] Graphics spec written (`docs/M3-GRAPHICS.md`)
+- [ ] VGA 640x480 16-color graphics mode (mode 0x12, register-level mode set)
+- [ ] 2D primitives (`Pixel`/`Line`/`Rect`/`FillRect`) + bitmap font `Text`
+- [ ] Sprite bank drawable from NOC source (`Sprite`)
+- [ ] Accept: a NOC program animates a moving sprite (screendump-verified)
 
 ## M4 — User mode & multitasking
 - [ ] User-mode NOC processes, syscall gate

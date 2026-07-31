@@ -10,7 +10,6 @@
 #include "kbd.h"
 #include "pmm.h"
 #include "heap.h"
-#include "prompt.h"
 #include "noc.h"
 
 static void heap_test(void)

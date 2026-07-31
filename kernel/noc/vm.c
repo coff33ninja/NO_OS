@@ -132,7 +132,17 @@ static bool pop(u64 *out)
 
 static bool run_loop(void)
 {
+    u64 iters = 0;
     while (nframes > 0) {
+        /* Break out of runaway programs: Esc / Ctrl+C aborts the run. */
+        if ((iters++ & 0xFF) == 0) {
+            int c = kbd_peekc();
+            if (c == 0x1B || c == 0x03) {
+                kbd_getc(); /* consume */
+                vmerr("interrupted");
+                return false;
+            }
+        }
         frame *f = &frames[nframes - 1];
         if (f->pc >= f->code_len) {
             vmerr("program counter ran off end of code");
@@ -644,12 +654,34 @@ static bool b_Len(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    printk("commands: Help, Version, MemInfo, Echo, FaultTest, Reboot, "
+           "Print, PrintLn, Sleep, Time, KeyGet, KeyPressed, Alloc, Free, "
+           "MemSet, MemCpy, Len\n");
+    *ret = 0;
+    return true;
+}
+
+static bool b_Echo(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)ret;
+    if (n < 1)
+        return false;
+    printk("%s\n", (const char *)args[0]);
+    return true;
+}
+
 static bool b_Version(void *vm, u64 *args, usize n, u64 *ret)
 {
     (void)vm;
     (void)args;
     (void)n;
-    printk("kernel version: NO_OS v0.1 (milestone M1)\n");
+    printk("kernel version: NO_OS v0.1\n");
     *ret = 0;
     return true;
 }
@@ -710,6 +742,8 @@ const noc_builtin noc_builtins[] = {
     { "MemSet",     NTYPE_VOID, 3, false, b_MemSet },
     { "MemCpy",     NTYPE_VOID, 3, false, b_MemCpy },
     { "Len",        NTYPE_I64,  1, false, b_Len },
+    { "Help",       NTYPE_VOID, 0, false, b_Help },
+    { "Echo",       NTYPE_VOID, 1, false, b_Echo },
     { "Version",    NTYPE_VOID, 0, false, b_Version },
     { "MemInfo",    NTYPE_VOID, 0, false, b_MemInfo },
     { "FaultTest",  NTYPE_VOID, 0, false, b_FaultTest },

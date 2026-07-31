@@ -135,7 +135,7 @@ extern bool noc_format(char *out, usize cap, const char *fmt,
                        const u64 *args, usize n);
 
 /* ---- line editor (kern/line.c) ---- */
-usize line_read(char *buf, usize cap);
+usize line_read(char *buf, usize cap, const char *prompt);
 
 /* ---- internals (lexer.c / parser.c / compiler.c) ---- */
 typedef struct {

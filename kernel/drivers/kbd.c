@@ -8,7 +8,7 @@
 
 static u8  buf[BUF_SIZE];
 static volatile u16 head, tail;
-static bool shift, caps, ext;
+static bool shift, caps, ext, ctrl;
 
 static const char kb_normal[128] = {
     0, 27,
@@ -64,9 +64,17 @@ static void kbd_handler(struct regs *r)
 
     if (ext) {
         ext = false;
-        if (sc == 0x2A) shift = true;   /* E0-prefixed left shift */
-        if (sc == 0x36) shift = true;   /* E0-prefixed right shift */
-        /* releases and arrows/etc. ignored for now */
+        if (sc == 0x1D)      ctrl = true;              /* E0 right ctrl */
+        else if (sc == 0x9D) ctrl = false;
+        else if (sc == 0x2A) shift = true;             /* E0 left shift */
+        else if (sc == 0x36) shift = true;             /* E0 right shift */
+        else if (sc == 0x48) kbd_push(KBD_UP);
+        else if (sc == 0x50) kbd_push(KBD_DOWN);
+        else if (sc == 0x4B) kbd_push(KBD_LEFT);
+        else if (sc == 0x4D) kbd_push(KBD_RIGHT);
+        else if (sc == 0x47) kbd_push(KBD_HOME);
+        else if (sc == 0x4F) kbd_push(KBD_END);
+        else if (sc == 0x53) kbd_push(KBD_DEL);
         pic_eoi(1);
         return;
     }
@@ -87,6 +95,16 @@ static void kbd_handler(struct regs *r)
         pic_eoi(1);
         return;
     }
+    if (sc == 0x1D) {                   /* ctrl press */
+        ctrl = true;
+        pic_eoi(1);
+        return;
+    }
+    if (sc == 0x9D) {                   /* ctrl release */
+        ctrl = false;
+        pic_eoi(1);
+        return;
+    }
     if (sc == 0x3A) {                   /* caps lock */
         caps = !caps;
         pic_eoi(1);
@@ -99,6 +117,8 @@ static void kbd_handler(struct regs *r)
     }
 
     char c = (shift ^ caps) ? kb_shift[sc & 0x7F] : kb_normal[sc & 0x7F];
+    if (ctrl && c >= 'a' && c <= 'z')
+        c = (char)(c - 'a' + 1);        /* Ctrl+A..Z -> control codes 1..26 */
     if (c)
         kbd_push(c);
     pic_eoi(1);
@@ -124,6 +144,13 @@ int kbd_getc(void)
     char c = (char)buf[tail];
     tail = (u16)((tail + 1) % BUF_SIZE);
     return (int)(u8)c;
+}
+
+int kbd_peekc(void)
+{
+    if (head == tail)
+        return -1;
+    return (int)(u8)buf[tail];
 }
 
 int kbd_readc(void)

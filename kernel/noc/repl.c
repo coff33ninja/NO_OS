@@ -2,7 +2,6 @@
 #include "heap.h"
 #include "string.h"
 #include "printk.h"
-#include "prompt.h"
 
 #define NOC_ARENA_SIZE (1024 * 1024)
 
@@ -89,12 +88,10 @@ static bool noc_exec_line(const char *line)
 void noc_repl(void)
 {
     char line[512];
-    printk("NOC shell. type 'help' or NOC code.\n");
+    printk("NOC shell. type 'Help;' or NOC code.\n");
     for (;;) {
-        printk("no/os> ");
-        line_read(line, sizeof(line));
-        if (!noc_exec_line(line))
-            prompt_handle(line);
+        line_read(line, sizeof(line), "no/os> ");
+        noc_exec_line(line);
     }
 }
 
