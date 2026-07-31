@@ -433,10 +433,10 @@ function Invoke-Test {
         if ($aCount -lt 3 -or $bCount -lt 3) {
             throw "demo interleaving failed: A=$aCount B=$bCount"
         }
-        if ($tail -notmatch 'A.*B') {
+        if ($tail -notmatch '(?s)A.*B') {
             throw 'demo: no A-then-B interleaving observed'
         }
-        if ($tail -notmatch 'B.*A') {
+        if ($tail -notmatch '(?s)B.*A') {
             throw 'demo: no B-then-A interleaving observed'
         }
 
@@ -451,7 +451,7 @@ function Invoke-Test {
         Start-Sleep -Milliseconds 800
         $c = Get-Log
         $tasks = [regex]::Matches($c,
-            'pid\s+\d+\s+(ready|run|blocked|zombie)\s+(user|kern)')
+            '(?m)^\d+\s+(ready|run|blocked|zombie)\s+(user|kern)')
         if ($tasks.Count -lt 3) {
             throw "Ps: expected 3+ tasks, saw $($tasks.Count)"
         }

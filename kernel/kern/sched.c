@@ -19,6 +19,7 @@ static task_t tasks[TASK_MAX];
 static task_t *current;
 static u32 next_pid = 1;
 static u32 sched_last; /* last picked user task index (round-robin) */
+static void (*sched_idle_hook)(void) = NULL;
 
 task_t *sched_current(void)
 {
@@ -271,10 +272,25 @@ void sched_ps(void)
     printk("pid  state   kind  name\n");
     for (u32 i = 0; i < TASK_MAX; i++) {
         task_t *t = &tasks[i];
-        if (t->pid == 0 && !t->user)
+        if (!t->kstack)
             continue; /* unused slot */
         printk("%u  %s  %s  %s\n",
                (unsigned)t->pid, state_name(t->state),
                t->user ? "user" : "kern", t->name);
+    }
+}
+
+void sched_register_idle_hook(void (*fn)(void))
+{
+    sched_idle_hook = fn;
+}
+
+void sched_idle(void)
+{
+    for (;;) {
+        __asm__ volatile("sti");
+        if (sched_idle_hook)
+            sched_idle_hook();
+        __asm__ volatile("hlt");
     }
 }

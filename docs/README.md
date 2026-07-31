@@ -35,8 +35,8 @@ See `docs/ADR/` for detailed rationales:
 ### Specifications
 - [SPEC.md](docs/SPEC.md) - Overall architecture and design decisions
 - [NOC.md](docs/NOC.md) - The NO_OS Command Language (shell and application language)
-- [M3-USERMODE.md](docs/M3-USERMODE.md) - User mode and multitasking (current focus)
-- [M4-FILESYSTEM.md](docs/M4-FILESYSTEM.md) - Persistent storage (prerequisite for M5)
+- [M3-USERMODE.md](docs/M3-USERMODE.md) - User mode and multitasking (complete)
+- [M4-FILESYSTEM.md](docs/M4-FILESYSTEM.md) - Persistent storage (current focus)
 - [M5-AI.md](docs/M5-AI.md) - Machine learning and self-evolution (AI/ML focus)
 - [M8-GRAPHICS.md](docs/M8-GRAPHICS.md) - Graphics subsystem (GUI last)
 
@@ -48,8 +48,8 @@ See `docs/ADR/` for detailed rationales:
 - [x] M1: Core services (GDT/IDT, PIC/PIT, keyboard, memory, printk)
 - [x] M2: NOC language (lexer, parser, compiler, VM, REPL)
 - [x] M2.5: Shell & stability (line editor, interruptible VM)
-- [ ] M3: User mode & multitasking (in progress)
-- [ ] M4: Filesystem (planned)
+- [x] M3: User mode & multitasking
+- [ ] M4: Filesystem (next)
 - [ ] M5: ML/LLM & self-evolution (AI focus)
 - [ ] M6: Performance & self-hosting (stretch)
 - [ ] M7: Fun (stretch: audio, games)
@@ -102,9 +102,9 @@ NO_OS takes a different approach:
 
 ## Current Status
 
-The system is actively implementing **M3: User Mode & Multitasking**, which provides the essential process isolation and memory protection needed for safely running experimental AI code in user-space processes.
+The system has completed **M3: User Mode & Multitasking** — ring-3 NOC processes with memory protection and preemptive multitasking, validated by the boot-test acceptance suite (`TEST PASS`). The allocator telemetry hooks (`pmm_total_bytes`/`pmm_free_bytes`/`sched_register_idle_hook`) are in place as the foundation for growth.
 
-Once M3 is complete, **M4 (Filesystem)** will provide persistent storage for model weights and training data, enabling **M5 (ML/LLM & Self-Evolution)** where the real AI magic happens.
+Next up is **M4 (Filesystem)**, which will provide persistent storage for model weights and training data, enabling **M5 (ML/LLM & Self-Evolution)** where the real AI magic happens.
 
 ## Contributing
 
@@ -115,4 +115,4 @@ See the ADR directory for the reasoning behind key architectural choices that ma
 ---
 
 *Last updated: 2026-08-01*
-*Build status: M3 user-mode multitasking in progress*
+*Build status: M3 user-mode multitasking complete, TEST PASS*

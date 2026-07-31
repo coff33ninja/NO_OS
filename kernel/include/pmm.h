@@ -14,5 +14,9 @@ void pmm_free_frames(u64 addr, usize count);
 
 u64 pmm_total_frames(void);
 u64 pmm_avail_frames(void);
+u64 pmm_used_bytes(void);
+
+u64 pmm_total_bytes(void);
+u64 pmm_free_bytes(void);
 
 #endif

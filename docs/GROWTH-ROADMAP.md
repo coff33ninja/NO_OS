@@ -99,8 +99,8 @@ Value Density = (Time Saved by Automation) / (RAM Used by Opportunistic Features
 | **M1** | Womb | Timing/infrastructure for determinism |
 | **M2** | Womb → Infant | NOC as interaction language (enables observation) |
 | **M2.5** | Infant | Interruptible VM (enables safe observation during execution) |
-| **M3** | **Infant** (16-32MB) | **User mode = SAFE SANDBOX FOR MODEL EXECUTION** ← **YOUR CURRENT FOCUS** |
-| **M4** | Infant → Child | **Filesystem = PERSISTENT STORAGE FOR MODELS/CORPUS** |
+| **M3** | **Infant** (16-32MB) | **User mode = SAFE SANDBOX FOR MODEL EXECUTION** ✅ DONE |
+| **M4** | Infant → Child | **Filesystem = PERSISTENT STORAGE FOR MODELS/CORPUS** ← **CURRENT FOCUS** |
 | **M5** | Child → Teen | **model_budget(n) syscall = FORMAL ALLOCATION INTERFACE** |
 | **M6** | Teen → Adult | **JIT COMPILER = ENABLES LARGER MODELS IN SAME RAM** |
 | **M7+** | Adult | Domain specialization, RAG, NL→NOC |
@@ -109,19 +109,29 @@ Value Density = (Time Saved by Automation) / (RAM Used by Opportunistic Features
 
 ---
 
-## 🛠️ IMMEDIATE ACTION FOR M3 BUG FIXING
+## ✅ M3 HOOKS — IMPLEMENTED (verified by boot-test TEST PASS)
 
-While addressing opencde validation issues, add **only these two non-invasive hooks** (takes <10 minutes):
+The two hooks below were added during M3 bug fixing and are now live. Note: the codebase uses `FRAME_SIZE` (not `PAGE_SIZE`) and the pmm getters are functions, so the final implementations are `pmm_total_frames() * FRAME_SIZE` / `pmm_avail_frames() * FRAME_SIZE`.
 
-### 1. In `kernel/mm/pmm.c` (append to existing file - requires zero changes to current code):
+### 1. In `kernel/mm/pmm.c` (implemented):
 ```c
-/* 
- * REQUIRED FOR GROWTH ROADMAP - SAFE TO ADD DURING M3 BUG FIXING
- * Adds zero runtime overhead when unused (NULL-check in scheduler is ~1ns)
- */
-u64 pmm_total_bytes(void) { return pmm_total_frames * PAGE_SIZE; }
-u64 pmm_free_bytes(void)  { return pmm_free_count  * PAGE_SIZE; }
+u64 pmm_total_bytes(void) { return pmm_total_frames() * FRAME_SIZE; }
+u64 pmm_free_bytes(void)  { return pmm_avail_frames()  * FRAME_SIZE; }
 ```
+
+### 2. In `kernel/kern/sched.c` (implemented, hook kept static per docs):
+```c
+static void (*sched_idle_hook)(void) = NULL;
+void sched_register_idle_hook(void (*fn)(void)) { sched_idle_hook = fn; }
+void sched_idle(void) {
+    for (;;) {
+        __asm__ volatile("sti");
+        if (sched_idle_hook) sched_idle_hook();
+        __asm__ volatile("hlt");
+    }
+}
+```
+Public declarations live in `kernel/include/sched.h`; `sched_idle()` is called from `kmain` after the REPL.
 
 ### 2. In `kernel/kern/sched.c` (add near other function prototypes):
 ```c
@@ -151,6 +161,4 @@ Remember: **The goal isn't to build an "AI OS" — it's to build an OS that *nat
 
 ---
 *Last updated: 2026-08-01*  
-*Status: Ready for immediate implementation during M3 bug fixing*  
-*Depends on: None (safe to add to current codebase)*  
-*Philosophy: Measure value, not parameters. Ship useful increments, not speculative grandeur.*
+*Status: M3 hooks implemented and verified (TEST PASS). Next: M4 filesystem → Infant-to-Child transition*

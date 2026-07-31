@@ -124,3 +124,6 @@ void pmm_free_frames(u64 addr, usize count)
 u64 pmm_total_frames(void) { return total_frames; }
 u64 pmm_avail_frames(void) { return free_frames; }
 u64 pmm_used_bytes(void)   { return (total_frames - free_frames) * FRAME_SIZE; }
+
+u64 pmm_total_bytes(void) { return pmm_total_frames() * FRAME_SIZE; }
+u64 pmm_free_bytes(void)  { return pmm_avail_frames() * FRAME_SIZE; }

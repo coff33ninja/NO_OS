@@ -124,6 +124,5 @@ void kmain(u32 mb_info)
 
     noc_repl();
 
-    for (;;)
-        __asm__ volatile("hlt");
+    sched_idle();
 }

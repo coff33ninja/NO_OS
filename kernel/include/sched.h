@@ -59,4 +59,8 @@ i64 sched_spawn(const char *code, const char *name);
 /* Serialize one line of task list for Ps. */
 void sched_ps(void);
 
+/* Idle hook for opportunistic work */
+void sched_register_idle_hook(void (*fn)(void));
+void sched_idle(void);
+
 #endif

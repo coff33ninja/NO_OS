@@ -19,8 +19,8 @@ Every milestone ends with a bootable, QEMU-testable acceptance case.
 | **M1** — Core services (GDT/IDT, PIC/PIT, PS/2, PMM + heap, printk) | done |
 | **M2** — NOC bytecode language (lexer, parser, compiler, VM, REPL) | done |
 | **M2.5** — Shell & stability (bare-call builtins, line editor, interruptible VM) | done |
-| **M3** — User mode & multitasking | next |
-| **M4** — Filesystem | |
+| **M3** — User mode & multitasking | done |
+| **M4** — Filesystem | next |
 | **M5** — ML/LLM & self-evolution | |
 | **M6** — Stretch: JIT & self-hosting | |
 | **M7** — Stretch: PC speaker & games | |
@@ -37,6 +37,9 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full milestone plan.
 - **Line editor** — history (up/down), cursor movement, Ctrl+C / Esc clears.
 - **Safe trap handling** — deliberate faults log `RIP`/`CR2` and halt cleanly
   instead of triple-faulting (`FaultTest`).
+- **User mode & multitasking** — ring-3 NOC processes (`dema`/`demb`) with
+  per-process PML4 isolation, preemptive round-robin scheduling, and a
+  `Ps` task listing (M3).
 - **Bare-identifier builtins** — admin commands are pure NOC builtins:
   `Help`, `Version`, `MemInfo`, `Echo`, `FaultTest`, `Reboot`.
 - **Serial console** (COM1) for headless testing and harness automation.
@@ -56,21 +59,21 @@ The full language spec lives in [`docs/NOC.md`](docs/NOC.md).
 
 ## Architecture
 
-Everything runs in ring 0 until the user-mode milestone (M3). The kernel is
-written in C (`zig cc` / clang, freestanding, pure scalar GPR code — no SSE,
-since boot code leaves `CR4.OSFXSR` clear). NOC is the shell and application
-language.
+Everything runs in ring 0 until the user-mode milestone (M3); since M3, NOC
+processes execute in ring 3 under a per-process PML4. The kernel is written in
+C (`zig cc` / clang, freestanding, pure scalar GPR code — no SSE, since boot
+code leaves `CR4.OSFXSR` clear). NOC is the shell and application language.
 
 ```
 kernel/
-  arch/x86_64/   boot.s, gdt, idt, isr, interrupts
+  arch/x86_64/   boot.s, gdt, idt, isr, syscall, tss
   drivers/       vga, serial, keyboard, pit, pic
   mm/            pmm (frame allocator), heap
-  kern/          kernel.c, printk, string, line editor
+  kern/          kernel.c, sched.c (tasks, blob spawn), printk, string, line editor
   noc/           lexer, parser, compiler, vm, repl
   include/       shared headers
 scripts/         build.ps1, run-qemu.ps1
-docs/            SPEC.md, ROADMAP.md, NOC.md, M8-GRAPHICS.md
+docs/            SPEC.md, ROADMAP.md, NOC.md, M3-USERMODE.md, M8-GRAPHICS.md
 ```
 
 The canonical architecture spec is [`docs/SPEC.md`](docs/SPEC.md).
@@ -117,11 +120,14 @@ history and Ctrl+C, Esc-interrupt recovery, and fault trapping.
 - [`docs/SPEC.md`](docs/SPEC.md) — architecture specification and design decisions
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — milestone plan
 - [`docs/NOC.md`](docs/NOC.md) — the NOC language reference
+- [`docs/M3-USERMODE.md`](docs/M3-USERMODE.md) — user mode & multitasking spec
+- [`docs/M4-FILESYSTEM.md`](docs/M4-FILESYSTEM.md) — filesystem milestone (next)
 - [`docs/M8-GRAPHICS.md`](docs/M8-GRAPHICS.md) — graphics milestone design (VGA mode 0x12, sprites)
 
 ## Status
 
-Early but booting, testable, and language-complete at the shell. The "AI-
-assisted" part of the roadmap — a kernel-resident micro-transformer that
-learns from your NOC history, drafts programs, and runs them sandboxed — is
-milestone M5.
+M3 (user mode & multitasking) complete — boot, test, and acceptance harness all
+green (`TEST PASS`). The "AI-assisted" part of the roadmap — a kernel-resident
+micro-transformer that learns from your NOC history, drafts programs, and runs
+them sandboxed — is milestone M5, which builds on the M4 filesystem for model
+and corpus persistence.

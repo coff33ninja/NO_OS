@@ -61,39 +61,7 @@ void isr_dispatch(u64 vector, u64 error, struct regs *r)
             if (vector == 14) { /* page fault */
                 u64 cr2;
                 __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-                printk("  cr2=0x%llx (P=%d U=%d I/D=%d)\n", cr2,
-                       (int)(error & 1), (int)((error >> 2) & 1),
-                       (int)((error >> 4) & 1));
-                u8 *pc = (u8 *)r->rip;
-                printk("  [%p]=%x %x %x %x\n", pc,
-                       pc[0], pc[1], pc[2], pc[3]);
-                u64 cr3v;
-                __asm__ volatile("mov %%cr3, %0" : "=r"(cr3v));
-                u64 *pl = (u64 *)cr3v;
-                u64 pml4i = (r->rip >> 39) & 0x1FF;
-                u64 pdpti = (r->rip >> 30) & 0x1FF;
-                u64 pdi   = (r->rip >> 21) & 0x1FF;
-                u64 pti   = (r->rip >> 12) & 0x1FF;
-                printk("  cr3=0x%llx pml4[%u]=0x%llx\n", cr3v,
-                       (unsigned)pml4i, pl[pml4i]);
-                if (pl[pml4i] & 1) {
-                    u64 *pdpt = (u64 *)(pl[pml4i] & ~0xFFFUL);
-                    printk("  pdpt[%u]=0x%llx\n", (unsigned)pdpti, pdpt[pdpti]);
-                    if (pdpt[pdpti] & 1) {
-                        u64 *pd = (u64 *)(pdpt[pdpti] & ~0xFFFUL);
-                        printk("  pd[%u]=0x%llx\n", (unsigned)pdi, pd[pdi]);
-                        if (pd[pdi] & 1) {
-                            u64 *pt = (u64 *)(pd[pdi] & ~0xFFFUL);
-                            printk("  pt[%u]=0x%llx\n", (unsigned)pti, pt[pti]);
-                            if (pt[pti] & 1) {
-                                u64 pf = pt[pti] & ~0xFFFUL;
-                                u8 *fr = (u8 *)pf + (r->rip & 0xFFF);
-                                printk("  phys[0x%llx]=%x %x %x %x\n",
-                                       pf, fr[0], fr[1], fr[2], fr[3]);
-                            }
-                        }
-                    }
-                }
+                printk("  cr2=0x%llx\n", cr2);
             }
             sched_exit_user(r, -1);
             return;

@@ -6,33 +6,30 @@ You've asked me to document the dynamic memory allocation system we've been disc
 
 Implement **only what's necessary during M3 bug fixing** to enable your vision of an OS that organically grows its AI capabilities with available resources — without delaying your current work or adding risk.
 
-## ✅ IMMEDIATE ACTIONS (DO THESE WHILE FIXING BUGS)
+## ✅ IMMEDIATE ACTIONS — DONE (implemented & verified during M3 bug fixing)
 
-Add **just these two non-invasive, zero-risk implementations**:
+Both hooks are implemented, merged with the M3 fixes, and verified by the boot-test (`TEST PASS`).
 
-### 1. Memory Telemetry (5 lines in `kernel/mm/pmm.c`)
+### 1. Memory Telemetry (`kernel/mm/pmm.c`)
 ```c
-// Add ANYWHERE in pmm.c - requires zero changes to existing code
-u64 pmm_total_bytes(void) { return pmm_total_frames * PAGE_SIZE; }
-u64 pmm_free_bytes(void)  { return pmm_free_count  * PAGE_SIZE; }
+u64 pmm_total_bytes(void) { return pmm_total_frames() * FRAME_SIZE; }
+u64 pmm_free_bytes(void)  { return pmm_avail_frames()  * FRAME_SIZE; }
 ```
 
-### 2. Scheduler Hook (5 lines in `kernel/kern/sched.c`)
+### 2. Scheduler Hook (`kernel/kern/sched.c`)
 ```c
-// Add near other function prototypes
 static void (*sched_idle_hook)(void) = NULL;
 void sched_register_idle_hook(void (*fn)(void)) { sched_idle_hook = fn; }
 
-// THEN modify your existing sched_idle() loop:
 void sched_idle(void) {
     for (;;) {
-        __asm__ volatile("sti; hlt");  // YOUR EXISTING CODE
-        if (sched_idle_hook) {         // ADD THESE TWO LINES
-            sched_idle_hook();         // 
-        }
+        __asm__ volatile("sti");
+        if (sched_idle_hook) { sched_idle_hook(); }
+        __asm__ volatile("hlt");
     }
 }
 ```
+Public declarations: `pmm_total_bytes`/`pmm_free_bytes` in `kernel/include/pmm.h`; `sched_register_idle_hook`/`sched_idle` in `kernel/include/sched.h`. The hook pointer stays `static` in sched.c.
 
 ## 🔒 WHY THIS IS SAFE FOR YOUR CURRENT WORK
 
@@ -109,5 +106,5 @@ That's how you avoid over-engineering while still building toward your vision.
 Implement these 10 lines while fixing your current bugs, and you've just laid the foundation for an OS that earns its intelligence one megabyte at a time.
 
 ---
-*Ready to copy/paste. Zero risk. Maximum future value.*  
+*Hooks implemented. Verified by boot-test TEST PASS.*  
 *Last updated: 2026-08-01*

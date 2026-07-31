@@ -41,13 +41,13 @@ spec -> implement -> boot-test -> commit.
 - [x] Accept: harness drives bare commands, history recall, ctrl-c clear,
       Esc interrupt, and shell recovery
 
-## M3 — User mode & multitasking
+## M3 — User mode & multitasking ✅
 _(CLI-first foundation: sandboxed NOC processes are what make self-evolution safe)_
-- [ ] M3 spec written (`docs/M3-USERMODE.md`)
-- [ ] User-mode NOC processes, syscall gate (`int 0x80`)
-- [ ] Preemptive PIT scheduling (frame-swap context switch, round-robin)
-- [ ] REPL stays alive as a kernel task while user processes run
-- [ ] Accept: two NOC scripts preemptively interleave
+- [x] M3 spec written (`docs/M3-USERMODE.md`)
+- [x] User-mode NOC processes, syscall gate (`int 0x80`)
+- [x] Preemptive PIT scheduling (frame-swap context switch, round-robin)
+- [x] REPL stays alive as a kernel task while user processes run
+- [x] Accept: two NOC scripts preemptively interleave
 
 ## M4 — Filesystem
 _(persists the NOC corpus and the trained model across reboot)_

@@ -76,16 +76,17 @@ void memory_allocate_policy(void) {
 
 ## Implementation Status & Hooks
 
-### Current State (M3 Implementation)
-The following functions **must be implemented** in M3 to enable future dynamic allocation:
+### Current State (M3 Implementation — DONE)
+The following M3 hooks are implemented and verified by the boot-test:
 ```c
 // In include/pmm.h
 u64 pmm_total_bytes(void);  // Total managed RAM
-u64 pmm_free_bytes(void);   // Currently free pages * PAGE_SIZE
-void pmm_set_low_watermark(u64 bytes); // Trigger reclaim when free < this
+u64 pmm_free_bytes(void);   // Currently free pages * FRAME_SIZE
+void pmm_set_low_watermark(u64 bytes); // Trigger reclaim when free < this (M4)
 
 // In include/sched.h
-void sched_register_idle_hook(void (*fn)(void)); // Called in idle loop
+void sched_register_idle_hook(void (*fn)(void)); // Called from sched_idle()
+void sched_idle(void); // Idle loop; invokes the hook when interrupts are on
 ```
 
 ### Planned M4/M5 Additions
@@ -221,5 +222,5 @@ Once these are in place, your current M3 work remains 100% valid, and you've lai
 
 ---
 *Last updated: 2026-08-01*  
-*Status: Ready for immediate implementation during M3 bug fixing*  
+*Status: M3 hooks implemented (pmm_total_bytes/pmm_free_bytes, sched_register_idle_hook + sched_idle). Next: M4 kswapd-style reclamation and Z2/Z3 tracking*  
 *Depends on: None (safe to add to current codebase)*
