@@ -41,25 +41,43 @@ spec -> implement -> boot-test -> commit.
 - [x] Accept: harness drives bare commands, history recall, ctrl-c clear,
       Esc interrupt, and shell recovery
 
-## M3 — Graphics (TempleOS soul) (deferred until shell is stable)
-- [ ] Graphics spec written (`docs/M3-GRAPHICS.md`)
-- [ ] VGA 640x480 16-color graphics mode (mode 0x12, register-level mode set)
-- [ ] 2D primitives (`Pixel`/`Line`/`Rect`/`FillRect`) + bitmap font `Text`
-- [ ] Sprite bank drawable from NOC source (`Sprite`)
-- [ ] Accept: a NOC program animates a moving sprite (screendump-verified)
-
-## M4 — User mode & multitasking
+## M3 — User mode & multitasking
+_(CLI-first foundation: sandboxed NOC processes are what make self-evolution safe)_
 - [ ] User-mode NOC processes, syscall gate
 - [ ] Preemptive PIT scheduling
 - [ ] Accept: two NOC scripts preemptively interleave
 
-## M5 — Filesystem
+## M4 — Filesystem
+_(persists the NOC corpus and the trained model across reboot)_
 - [ ] QEMU IDE disk driver
 - [ ] Own FAT-like FS (RedSea homage)
 - [ ] Save/load/run `.noc` scripts across reboot
 
-## M6 — Stretch
+## M5 — ML/LLM & self-evolution (CLI-first)
+- [ ] Kernel-side micro-ANN: page/swap prefetcher + command predictor that
+      learns user patterns (the memory-discipline core)
+- [ ] Model weights are shared read-only pages, demand-paged from disk and
+      evictable under pressure; `model_budget(n)` syscall enforces a hard
+      memory cap per LLM process
+- [ ] Byte-level micro-transformer (~1-10M params, 8-bit) trained on the NOC
+      command history; runs as a sandboxed user-mode process
+- [ ] Self-evolution loop: log interactions -> idle retrain -> model drafts
+      NOC code -> runs sandboxed -> output feeds the (versioned,
+      rollback-safe) corpus
+- [ ] Accept: the model predicts the next command from history; a
+      model-drafted NOC program runs and its result shows in the shell
+
+## M6 — Stretch: performance & self-hosting
 - [ ] Bytecode -> x86-64 JIT in a code heap
 - [ ] Self-host the NOC compiler
+
+## M7 — Stretch: fun
 - [ ] PC-speaker audio
 - [ ] Games / demo programs
+
+## M8 — Graphics (TempleOS soul) (GUI last)
+- [ ] Graphics spec written (`docs/M8-GRAPHICS.md`)
+- [ ] VGA 640x480 16-color graphics mode (mode 0x12, register-level mode set)
+- [ ] 2D primitives (`Pixel`/`Line`/`Rect`/`FillRect`) + bitmap font `Text`
+- [ ] Sprite bank drawable from NOC source (`Sprite`)
+- [ ] Accept: a NOC program animates a moving sprite (screendump-verified)
