@@ -32,6 +32,9 @@ $cflags = @(
     '-fno-pic'
     '-mno-red-zone'
     '-mgeneral-regs-only'
+    '-mno-sse'
+    '-mno-sse2'
+    '-mno-mmx'
     '-fno-asynchronous-unwind-tables'
     '-g0'
     '-O2'
@@ -42,19 +45,35 @@ $cflags = @(
 # Relative C sources (kernel/ is the base); object name derived from path.
 $csrcs = @(
     'kern\kernel.c'
+    'kern\printk.c'
+    'kern\string.c'
+    'kern\prompt.c'
+    'mm\pmm.c'
+    'mm\heap.c'
+    'arch\x86_64\gdt.c'
+    'arch\x86_64\idt.c'
+    'arch\x86_64\isr.c'
     'drivers\vga.c'
     'drivers\serial.c'
+    'drivers\pic.c'
+    'drivers\pit.c'
+    'drivers\kbd.c'
 )
 
 function Invoke-Build {
     New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
-    # boot.s -> boot.o
-    & $nasm -f elf64 (Join-Path $kernelDir 'arch\x86_64\boot.s') -o (Join-Path $buildDir 'boot.o')
-    if ($LASTEXITCODE -ne 0) { throw 'nasm failed' }
+    # .s files -> objects (boot.s, isr.s, ...)
+    $objs = @()
+    Get-ChildItem (Join-Path $kernelDir 'arch\x86_64') -Filter '*.s' | Sort-Object Name | ForEach-Object {
+        $o = Join-Path $buildDir ($_.BaseName + '.o')
+        $objs += $o
+        Write-Host "asm $($_.Name)"
+        & $nasm -f elf64 $_.FullName -o $o
+        if ($LASTEXITCODE -ne 0) { throw "nasm failed on $($_.Name)" }
+    }
 
     # C sources -> objects
-    $objs = @((Join-Path $buildDir 'boot.o'))
     foreach ($s in $csrcs) {
         $obj = Join-Path $buildDir (($s -replace '[\\/]', '_') -replace '\.c$', '.o')
         $objs += $obj
@@ -86,22 +105,102 @@ function Invoke-Test {
     $log = Join-Path $buildDir 'boot-test.log'
     Remove-Item -Force $log -ErrorAction SilentlyContinue
 
+    $monPort = 4444
     $p = Start-Process -FilePath $qemu -ArgumentList @(
         '-kernel', $kernelElf, '-m', '64M',
-        '-display', 'none', '-serial', 'stdio', '-no-reboot'
-    ) -NoNewWindow -RedirectStandardOutput $log -PassThru
+        '-display', 'none',
+        '-serial', "file:$log",
+        '-monitor', "tcp:127.0.0.1:$monPort,server,nowait",
+        '-no-reboot'
+    ) -PassThru
 
-    Start-Sleep -Seconds 4
-    if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
-
-    $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
-    Write-Host $content
-    if ($content -match 'NO_OS v0\.1 booted\.') {
-        Write-Host 'TEST PASS: banner found in serial output'
-        exit 0
+    function Send-Keys {
+        param([string]$text)
+        $client = [System.Net.Sockets.TcpClient]::new('127.0.0.1', $monPort)
+        $stream = $client.GetStream()
+        $sw = [System.IO.StreamWriter]::new($stream)
+        $sw.AutoFlush = $true
+        foreach ($ch in $text.ToCharArray()) {
+            $name = switch ($ch) {
+                ' ' { 'spc' }
+                "`n" { 'ret' }
+                default { $ch.ToString() }
+            }
+            $sw.Write("sendkey $name`n")
+            Start-Sleep -Milliseconds 150
+        }
+        $client.Close()
     }
-    Write-Host 'TEST FAIL: banner not found'
-    exit 1
+
+    function Wait-LogPattern {
+        param([string]$pattern, [int]$timeoutSec = 10)
+        $deadline = (Get-Date).AddSeconds($timeoutSec)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 200
+            if ($p.HasExited) { break }
+            $c = Get-Content -Raw $log -ErrorAction SilentlyContinue
+            if ($c) {
+                $c = $c -replace "`r`n", "`n"
+                if ($c -match $pattern) { return $true }
+            }
+        }
+        return $false
+    }
+
+    try {
+        # Wait for the keyboard echo prompt and drive the boot self-test.
+        if (-not (Wait-LogPattern 'keyboard echo test' 20)) {
+            $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
+            Write-Host $content
+            throw 'timeout waiting for keyboard echo prompt'
+        }
+        Send-Keys "ok`n`n"
+        if (-not (Wait-LogPattern 'boot-test-ok')) {
+            $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
+            Write-Host $content
+            throw 'keyboard echo did not yield boot-test-ok'
+        }
+
+        # Drive the interactive prompt.
+        if (-not (Wait-LogPattern 'no/os> ' 10)) {
+            $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
+            Write-Host $content
+            throw 'prompt did not appear'
+        }
+        Send-Keys "version`n"
+        if (-not (Wait-LogPattern 'kernel version: NO_OS v0.1')) {
+            throw 'version output missing'
+        }
+        Send-Keys "meminfo`n"
+        if (-not (Wait-LogPattern 'mem: \d+ MiB free of \d+ MiB')) {
+            throw 'meminfo output missing'
+        }
+        Send-Keys "help`n"
+        if (-not (Wait-LogPattern 'commands: help, version, meminfo')) {
+            throw 'help output missing'
+        }
+        Send-Keys "bogus`n"
+        if (-not (Wait-LogPattern "unknown command 'bogus'")) {
+            throw 'unknown-command handling missing'
+        }
+        Send-Keys "echo hello`n"
+        if (-not (Wait-LogPattern "`nhello`n")) {
+            throw 'echo output missing'
+        }
+
+        # Deliberate fault as the final check: #UD must trap, not triple-fault.
+        Send-Keys "fault`n"
+        if (-not (Wait-LogPattern 'EXCEPTION: Invalid Opcode')) {
+            throw 'deliberate fault was not trapped'
+        }
+
+        $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
+        Write-Host $content
+        Write-Host 'TEST PASS: boot self-test, prompt, and fault trapping all verified'
+        exit 0
+    } finally {
+        if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+    }
 }
 
 function Invoke-Clean {

@@ -65,6 +65,15 @@ This document is the canonical spec. Milestone definitions live in
 - Build driver: `scripts/build.ps1` (pwsh). Makefile wraps it.
 - Emulator: `C:\Program Files\qemu\qemu-system-x86_64.exe`.
 
+### Freestanding flags: clang 21 ignores `-mgeneral-regs-only`
+
+clang 21 (zig 0.16) still emits SSE/vector instructions under
+`-mgeneral-regs-only`: `va_start` saves the whole XMM register file
+(`movaps`), and string/format code is vectorized. With CR4.OSFXSR clear
+(boot code does not enable SSE) any XMM instruction raises #UD, then double
+fault -> triple fault. The build therefore also passes
+`-mno-sse -mno-sse2 -mno-mmx` so the kernel is pure scalar GPR code.
+
 ## 7. Boot process
 
 1. BIOS loads Multiboot loader (QEMU `-kernel`); CPU in 32-bit protected mode.

@@ -4,6 +4,7 @@ SECTIONS
 {
     /* Load the kernel at 1 MiB (conventional for multiboot). */
     . = 1M;
+    _kernel_start = .;
 
     .multiboot : ALIGN(4) {
         KEEP(*(.multiboot))
@@ -25,4 +26,6 @@ SECTIONS
         *(COMMON)
         *(.bss*)
     }
+
+    _kernel_end = .;
 }
