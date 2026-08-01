@@ -214,6 +214,7 @@ function Invoke-Test {
                 ',' { 'comma' }
                 '.' { 'dot' }
                 '/' { 'slash' }
+                '\' { 'backslash' }
                 '(' { 'shift-9' }
                 ')' { 'shift-0' }
                 '*' { 'shift-8' }
@@ -499,6 +500,30 @@ function Invoke-Test {
         Send-Keys "ListDir;`n"
         if (-not (Wait-LogPattern '\(0 entries\)')) {
             throw 'ListDir did not show an empty directory after delete'
+        }
+
+        # ---- M4: Run builtin executes a saved .noc script ----
+        # Save a three-line script (a function definition, a call that uses it,
+        # and a done marker) as a single file, then Run it. Function definitions
+        # must persist across the per-line execution, so sq=81 proves lines
+        # share the global function table.
+        Send-Keys "SaveFile(`"prog.noc`", `"I64 Sq(I64 x) { return x*x; }\nPrintLn(\`"sq=%d\`", Sq(9));\nPrintLn(\`"SCRIPT-DONE\`");`");`n"
+        if (-not (Wait-LogPattern 'fs: saved prog\.noc \(\d+ bytes\)')) {
+            throw 'SaveFile did not report prog.noc size'
+        }
+        Send-Keys "Run(`"prog.noc`");`n"
+        if (-not (Wait-LogPattern 'fs: run prog\.noc')) {
+            throw 'Run did not report reading the script'
+        }
+        if (-not (Wait-LogPattern 'sq=81')) {
+            throw 'Run: script function across lines did not evaluate'
+        }
+        if (-not (Wait-LogPattern 'SCRIPT-DONE')) {
+            throw 'Run did not execute the saved script to its end'
+        }
+        Send-Keys "DeleteFile(`"prog.noc`");`n"
+        if (-not (Wait-LogPattern 'fs: deleted')) {
+            throw 'Run cleanup DeleteFile did not report success'
         }
 
         # ---- M3: user mode & multitasking ----

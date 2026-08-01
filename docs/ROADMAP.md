@@ -59,9 +59,10 @@ _(persists the NOC corpus and the trained model across reboot)_
       caller's buffer)
 - [x] Persistence across reboot: harness saves a file, `system_reset`, and
       verifies the second boot mounts without re-formatting and reads it back
-- [ ] Run `.noc` scripts straight from the filesystem (load to the REPL /
-      `source` command) — saving/reading bytes works, executing a saved
-      program from disk does not yet
+- [x] `Run` builtin executes a saved `.noc` script: reads the file and feeds
+      each line to the NOC engine (like the REPL), so function definitions
+      defined on one line are callable on later lines; the builtin snapshots
+      and restores the VM execution state so the enclosing chunk is unaffected
 - [x] Accept: harness covers format/save/stat/list/read/delete plus
       reboot persistence and reports `TEST PASS`
 

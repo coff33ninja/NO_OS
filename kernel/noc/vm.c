@@ -940,6 +940,108 @@ static bool b_FormatDisk(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+/* Run executes a saved script by feeding its lines to noc_exec_line, exactly
+   like the REPL would. noc_exec_line re-enters noc_vm_run, which resets the
+   global vstack/frames/sp, so the enclosing chunk's execution state must be
+   snapshotted around the nested run and restored afterwards. */
+typedef struct {
+    u64   vstack[NOC_STACK_SIZE];
+    frame frames[NOC_MAX_FRAMES];
+    usize sp;
+    usize nframes;
+    char  err[128];
+    bool  has_result;
+    u64   result;
+} vm_state_t;
+
+static vm_state_t *vm_state_save(void)
+{
+    vm_state_t *s = noc_os_alloc(sizeof(vm_state_t));
+    if (!s)
+        return NULL;
+    memcpy(s->vstack, vstack, sizeof(vstack));
+    memcpy(s->frames, frames, sizeof(frames));
+    s->sp = sp;
+    s->nframes = nframes;
+    memcpy(s->err, vm_err, sizeof(vm_err));
+    s->has_result = has_result;
+    s->result = result;
+    return s;
+}
+
+static void vm_state_restore(vm_state_t *s)
+{
+    memcpy(vstack, s->vstack, sizeof(vstack));
+    memcpy(frames, s->frames, sizeof(frames));
+    sp = s->sp;
+    nframes = s->nframes;
+    memcpy(vm_err, s->err, sizeof(vm_err));
+    has_result = s->has_result;
+    result = s->result;
+    noc_os_free(s);
+}
+
+static bool b_Run(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    const char *name = (const char *)args[0];
+    int ino = fs_lookup(name);
+    if (ino < 0) {
+        noc_os_puts("fs: not found\n");
+        *ret = (u64)-1;
+        return true;
+    }
+    struct fs_inode in;
+    if (fs_stat((u32)ino, &in) != 0) {
+        *ret = (u64)-1;
+        return true;
+    }
+    u64 len = in.size;
+    char *src = noc_os_alloc((usize)len + 1);
+    if (!src) {
+        *ret = (u64)-1;
+        return true;
+    }
+    fs_read_file((u32)ino, src, len);
+    src[len] = '\0';
+
+    vm_state_t *sv = vm_state_save();
+    if (!sv) {
+        noc_os_free(src);
+        *ret = (u64)-1;
+        return true;
+    }
+
+    char buf[64];
+    sprintk(buf, sizeof(buf), "fs: run %s\n", name);
+    noc_os_puts(buf);
+
+    char *line = src;
+    for (usize i = 0; line[i]; i++) {
+        if (line[i] == '\n') {
+            line[i] = '\0';
+            if (i > 0 && line[i - 1] == '\r')
+                line[i - 1] = '\0';
+            noc_exec_line(line);
+            line = &line[i + 1];
+            i = 0;
+        }
+    }
+    if (*line) {
+        usize ll = strlen(line);
+        if (ll > 0 && line[ll - 1] == '\r')
+            line[ll - 1] = '\0';
+        noc_exec_line(line);
+    }
+
+    vm_state_restore(sv);
+    noc_os_free(src);
+    *ret = 0;
+    return true;
+}
+
 #endif /* !NOOS_USER */
 
 const noc_builtin noc_builtins[] = {
@@ -970,6 +1072,7 @@ const noc_builtin noc_builtins[] = {
     { "ListDir",    NTYPE_VOID, 0, false, b_ListDir },
     { "StatFile",   NTYPE_VOID, 1, false, b_StatFile },
     { "FormatDisk", NTYPE_VOID, 0, false, b_FormatDisk },
+    { "Run",        NTYPE_VOID, 1, false, b_Run },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);
