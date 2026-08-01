@@ -95,3 +95,41 @@ bool noc_exec_line(const char *line)
     noc_os_free(arena.base);
     return true;
 }
+
+/* Validate a NOC source line without running it: lex + parse + compile only.
+   Returns true when the text is accepted as NOC. Used to gate model-drafted
+   programs before spawning them, so a hallucinated draft is rejected instead
+   of executed. */
+bool noc_check_syntax(const char *line)
+{
+    if (!line || !*line)
+        return false;
+
+    const char *err = NULL;
+    noc_arena arena;
+    memset(&arena, 0, sizeof(arena));
+    arena.base = noc_os_alloc(NOC_ARENA_SIZE);
+    if (!arena.base)
+        return false;
+    arena.cap = NOC_ARENA_SIZE;
+
+    tok *toks = noc_arena_alloc(&arena, sizeof(tok) * NOC_MAX_TOKS);
+    if (!toks) {
+        noc_os_free(arena.base);
+        return false;
+    }
+    usize ntoks = 0;
+    bool ok = false;
+    if (noc_lex(line, &arena, toks, NOC_MAX_TOKS, &ntoks, &err)) {
+        ast *stmts = NULL;
+        usize nstmt = 0;
+        if (noc_parse(toks, ntoks, &arena, &stmts, &nstmt, &err)) {
+            noc_fn chunk;
+            memset(&chunk, 0, sizeof(chunk));
+            ok = noc_compile(stmts, nstmt, &arena, &chunk, &err);
+            free_chunk(&chunk);
+        }
+    }
+    noc_os_free(arena.base);
+    return ok;
+}

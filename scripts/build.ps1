@@ -838,6 +838,50 @@ function Invoke-Test {
             throw 'PredictBigram did not generate the expected continuation'
         }
 
+        # Slice 8: model-drafted NOC program. Reset the model, build a
+        # controlled corpus of PrintLn("DRAFT-OK"); x5, then DraftRun with
+        # the seed PrintLn("DRAFT-OK" (balanced string, closing quote already
+        # in the seed) so generation only adds ');' -- the unambiguous
+        # CMD-record tail "->) -> ; -> \n. Seeding past the closing quote
+        # skips the K transition, where the [TICK] records' K->] (7) and the
+        # [OUT] records' K->\n (5) would both out-vote the close-quote K->"
+        # (5). The draft is syntax-checked, spawns as a ring-3 user process,
+        # and its output reaches the shell as a bare DRAFT-OK line.
+        $baseR = Get-Log
+        Send-Keys "TrainReset;`n"
+        if (-not (Wait-Appended $baseR 'model: reset')) {
+            throw 'TrainReset did not reset the model'
+        }
+        $baseC = Get-Log
+        Send-Keys "LogClear;`n"
+        if (-not (Wait-Appended $baseC 'log: cleared')) {
+            throw 'LogClear did not clear the interaction log'
+        }
+        $baseD = Get-Log
+        foreach ($i in 1..5) {
+            Send-Keys "PrintLn(`"DRAFT-OK`");`n"
+            if (-not (Wait-Appended $baseD 'DRAFT-OK')) {
+                throw "draft corpus: DRAFT-OK #$i did not echo"
+            }
+            $baseD = Get-Log
+        }
+        $baseT2 = Get-Log
+        Send-Keys "Train;`n"
+        if (-not (Wait-Appended $baseT2 'train: ok \(\d+ passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)')) {
+            throw 'Train did not run on the draft corpus'
+        }
+        $baseN = Get-Log
+        Send-Keys "DraftRun(`"PrintLn(`\`"DRAFT-OK`\`"`");`n"
+        if (-not (Wait-Appended $baseN 'draft: PrintLn\("DRAFT-OK"\);')) {
+            throw 'DraftRun did not print the completed draft'
+        }
+        if (-not (Wait-Appended $baseN 'draft: spawned pid \d+')) {
+            throw 'DraftRun did not spawn the draft as a user process'
+        }
+        if (-not (Wait-Appended $baseN '(?m)DRAFT-OK$')) {
+            throw 'the spawned draft output did not reach the shell'
+        }
+
         # Deliberate fault as the final check: #UD must trap, not triple-fault.
         Send-Keys "FaultTest`n"
         if (-not (Wait-LogPattern 'EXCEPTION: Invalid Opcode')) {
@@ -846,7 +890,7 @@ function Invoke-Test {
 
         $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
         Write-Host $content
-        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), bigram generation from the trained model, and fault trapping all verified'
+        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), bigram generation from the trained model, model-drafted NOC program spawned as a ring-3 user process with output reaching the shell, and fault trapping all verified'
         exit 0
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }

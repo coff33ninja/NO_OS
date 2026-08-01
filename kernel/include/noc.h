@@ -11,6 +11,8 @@ void noc_selftest(void);
 /* Shared lex/parse/compile/run of one NOC chunk (exec.c). Uses only the
    noc_os platform layer, so it works in the kernel REPL and in ring 3. */
 bool noc_exec_line(const char *line);
+/* Validate a NOC line (lex+parse+compile, no run). Gates model drafts. */
+bool noc_check_syntax(const char *line);
 
 /* ---- limits ---- */
 #define NOC_MAX_ARGS     16

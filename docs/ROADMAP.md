@@ -108,10 +108,23 @@ _(persists the NOC corpus and the trained model across reboot)_
         transitions; verified against a clean controlled corpus, where from
         seed `xyz` it reproduces the interaction-log byte structure
         (`pred: xyz\n[CK] Prin(")` — `[CMD]`'s C->M ties `[TICK]`'s C->K
-        and the lowest byte wins). (Real transformer, held-out evaluation,
-        and model-drafted code deferred to later M5 work.)
-- [ ] Accept: the model predicts the next command from history; a
+        and the lowest byte wins). The `[TICK]` record carries a fixed
+        token (not the wall-clock tick value) so the corpus -- and every
+        generation -- is timing-independent.
+  - [x] Model-drafted NOC program, syntax-gated and spawned sandboxed:
+        `DraftRun(<seed>);` completes the seed through the trained bigram,
+        validates the result with `noc_check_syntax` (lex+parse+compile,
+        no run) so a hallucinated draft is rejected instead of executed,
+        then `sched_spawn`s it as a ring-3 user process whose output lands
+        in the shell. Verified against a controlled corpus of
+        `PrintLn("DRAFT-OK");` x5: seed `PrintLn("DRAFT-OK"` (balanced
+        string, closing quote in the seed) completes deterministically to
+        `PrintLn("DRAFT-OK");`, spawns, and the bare `DRAFT-OK` reaches the
+        shell. (Real transformer and held-out evaluation deferred to later
+        M5 work.)
+- [x] Accept: the model predicts the next command from history; a
       model-drafted NOC program runs and its result shows in the shell
+      (`DraftRun` + `noc_check_syntax` + `sched_spawn`, harness-verified)
 
 ## M6 — Stretch: performance & self-hosting
 - [ ] Bytecode -> x86-64 JIT in a code heap

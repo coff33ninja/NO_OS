@@ -3,7 +3,6 @@
 #include "string.h"
 #include "printk.h"
 #include "fs.h"
-#include "pit.h"
 
 #define IL_RING_SIZE 65536  /* 64 KiB in-RAM training corpus (M5 spec) */
 #define IL_FILE_MAX 4096    /* persisted checkpoint; FS files cap at 5 KiB */
@@ -91,9 +90,12 @@ void il_end_capture(const char *cmd)
            (il_cap[il_cap_len - 1] == '\n' || il_cap[il_cap_len - 1] == '\r'))
         il_cap[--il_cap_len] = '\0';
 
-    char rec[96];
-    sprintk(rec, sizeof(rec), "[TICK] %llu", (unsigned long long)pit_ticks());
-    il_append(rec, strlen(rec));
+    /* One tick marker per REPL command. The payload is a fixed token, NOT
+       the wall-clock tick value: a byte-language model must train on a
+       deterministic corpus, and wall-clock digits are pure noise that make
+       the generated output depend on timing. */
+    static const char rec[] = "[TICK]";
+    il_append(rec, sizeof(rec) - 1);
 
     il_append_esc("[CMD] ", cmd);
 

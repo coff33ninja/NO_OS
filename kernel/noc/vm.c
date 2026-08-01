@@ -723,7 +723,7 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
                 "Spawn, Ps, Demo, SaveFile, ReadFile, DeleteFile, ListDir, "
                 "StatFile, FormatDisk, Run, Predict, Hist, ClearHist, PgPred, "
                 "ModelInfo, LogInfo, LogDump, LogSave, LogClear, "
-                "Train, TrainIdle, TrainReset, PredictBigram\n");
+                "Train, TrainIdle, TrainReset, PredictBigram, DraftRun\n");
     *ret = 0;
     return true;
 }
@@ -1223,6 +1223,53 @@ static bool b_PredictBigram(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+/* DraftRun(<seed>): the model completes the seed with its trained bigram
+   into a NOC program, which is syntax-checked and, if valid, spawned as a
+   ring-3 user process whose output reaches the shell. This is the M5
+   "model drafts NOC code -> runs sandboxed" step: generation stops at the
+   first newline so the draft is a single logical command line. */
+static bool b_DraftRun(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    const char *seed = (const char *)args[0];
+    usize sl = 0;
+    while (seed[sl])
+        sl++;
+    char prog[192];
+    if (sl + 1 >= sizeof(prog))
+        return false;
+    for (usize i = 0; i < sl; i++)
+        prog[i] = seed[i];
+    usize o = sl;
+    usize cont = train_generate(prog + o, sizeof(prog) - o - 1, seed, sl);
+    for (usize i = 0; i < cont; i++) {
+        if (prog[o + i] == '\n') {
+            cont = i;
+            break;
+        }
+    }
+    o += cont;
+    prog[o] = '\0';
+
+    noc_os_puts("draft: ");
+    noc_os_puts(prog);
+    noc_os_putc('\n');
+
+    if (!noc_check_syntax(prog)) {
+        noc_os_puts("draft: rejected\n");
+        *ret = (u64)-1;
+        return true;
+    }
+    i64 pid = sched_spawn(prog, "draft");
+    char buf[48];
+    sprintk(buf, sizeof(buf), "draft: spawned pid %d\n", (int)pid);
+    noc_os_puts(buf);
+    *ret = (u64)pid;
+    return true;
+}
+
 static bool b_LogInfo(void *vm, u64 *args, usize n, u64 *ret)
 {
     (void)vm;
@@ -1313,6 +1360,7 @@ const noc_builtin noc_builtins[] = {
     { "TrainIdle",  NTYPE_VOID, 1, false, b_TrainIdle },
     { "TrainReset", NTYPE_VOID, 0, false, b_TrainReset },
     { "PredictBigram", NTYPE_VOID, 1, false, b_PredictBigram },
+    { "DraftRun",   NTYPE_I64,  1, false, b_DraftRun },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);

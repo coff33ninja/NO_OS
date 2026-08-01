@@ -87,7 +87,8 @@ Input Embedding (256 → 64)     # Project bytes to model dimension
 ### 4.1. Log Format
 The kernel append-logs to `/var/interact.log` (pre-allocated circular buffer):
 ```
-[TICK] u64 timestamp
+[TICK] fixed token (one marker per command; wall-clock timestamp omitted so
+       the byte-bigram corpus stays timing-independent)
 [KEY]  u8 scancode, u8 state (press/release)
 [CMD]  str null-terminated NOC command entered
 [OUT]  str null-terminated command output
@@ -146,7 +147,27 @@ The kernel append-logs to `/var/interact.log` (pre-allocated circular buffer):
 > `[OUT] xyz` records beat `"`), `[`, `C` (tie among `[TICK]/[CMD]/[OUT]`,
 > lowest byte wins), `K` (`[TICK]`'s C->K ties `[CMD]`'s C->M and `K`<`M`),
 > then ` Prin(")` — i.e. the model faithfully reproduces the interaction
-> log's byte structure from a 3-byte seed.
+> log's byte structure from a 3-byte seed. The `[TICK]` record is a fixed
+> token (no wall-clock tick value) so the corpus and every generation are
+> timing-independent — tick digits used to leak timing noise into the
+> table and make the ` ` transition (digit vs `P`) a coin flip.
+
+> **Status (slice 8):** the accept criterion is closed — a model-drafted
+> NOC program is syntax-gated, spawned sandboxed, and its result reaches
+> the shell. `DraftRun(<seed>);` (`kernel/noc/vm.c`) completes the seed
+> through `train_generate`, stops at the first newline, then
+> `noc_check_syntax()` (`kernel/noc/exec.c` — lex+parse+compile, never
+> run) rejects malformed drafts, and `sched_spawn` launches the accepted
+> program as a ring-3 user process whose `SYS_PUTS` output lands on the
+> serial log. Verified against `TrainReset; LogClear;` + five
+> `PrintLn("DRAFT-OK");` + `Train;` + `DraftRun("PrintLn(\"DRAFT-OK\"");`:
+> the seed is a balanced string (closing quote included) so generation
+> only adds the unambiguous `")->` ; `->` \n` tail of the `[CMD]` record;
+> the draft prints as `draft: PrintLn("DRAFT-OK");`, spawns (`draft:
+> spawned pid 1`), and the bare `DRAFT-OK` output line reaches the shell.
+> Seeding past the closing quote deliberately skips the `K` transition,
+> where the `[TICK]` records' `K`->`]` and the `[OUT]` records' `K`->`\n`
+> would both out-vote the close-quote `K`->`"`.
 
 ### 4.3. Model Updates
 - New weights written to temporary file
