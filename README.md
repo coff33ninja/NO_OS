@@ -20,7 +20,7 @@ Every milestone ends with a bootable, QEMU-testable acceptance case.
 | **M2** — NOC bytecode language (lexer, parser, compiler, VM, REPL) | done |
 | **M2.5** — Shell & stability (bare-call builtins, line editor, interruptible VM) | done |
 | **M3** — User mode & multitasking | done |
-| **M4** — Filesystem | next |
+| **M4** — Filesystem | in progress |
 | **M5** — ML/LLM & self-evolution | |
 | **M6** — Stretch: JIT & self-hosting | |
 | **M7** — Stretch: PC speaker & games | |
@@ -42,6 +42,10 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full milestone plan.
   `Ps` task listing (M3).
 - **Bare-identifier builtins** — admin commands are pure NOC builtins:
   `Help`, `Version`, `MemInfo`, `Echo`, `FaultTest`, `Reboot`.
+- **Filesystem (M4)** — QEMU IDE driver plus `NO_OSFS`: dual superblocks,
+  bitmap allocator, and builtin `FormatDisk`/`SaveFile`/`ReadFile`/
+  `DeleteFile`/`ListDir`/`StatFile` commands. Data persists across reboot
+  (verified by the harness via `system_reset`).
 - **Serial console** (COM1) for headless testing and harness automation.
 
 ## NOC in 30 seconds
@@ -113,7 +117,8 @@ Or call the script directly: `pwsh -NoProfile -File scripts/build.ps1 -Action te
 
 `make test` runs the full acceptance harness against a headless QEMU instance:
 boot self-test, NOC compile/run checks, bare-command builtins, line-editor
-history and Ctrl+C, Esc-interrupt recovery, and fault trapping.
+history and Ctrl+C, Esc-interrupt recovery, filesystem save/read/delete plus
+reboot persistence, and fault trapping.
 
 ## Docs
 
@@ -121,13 +126,16 @@ history and Ctrl+C, Esc-interrupt recovery, and fault trapping.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — milestone plan
 - [`docs/NOC.md`](docs/NOC.md) — the NOC language reference
 - [`docs/M3-USERMODE.md`](docs/M3-USERMODE.md) — user mode & multitasking spec
-- [`docs/M4-FILESYSTEM.md`](docs/M4-FILESYSTEM.md) — filesystem milestone (next)
+- [`docs/M4-FILESYSTEM.md`](docs/M4-FILESYSTEM.md) — filesystem milestone design (in progress)
 - [`docs/M8-GRAPHICS.md`](docs/M8-GRAPHICS.md) — graphics milestone design (VGA mode 0x12, sprites)
 
 ## Status
 
 M3 (user mode & multitasking) complete — boot, test, and acceptance harness all
-green (`TEST PASS`). The "AI-assisted" part of the roadmap — a kernel-resident
-micro-transformer that learns from your NOC history, drafts programs, and runs
-them sandboxed — is milestone M5, which builds on the M4 filesystem for model
-and corpus persistence.
+green (`TEST PASS`). M4 (filesystem) is in progress: IDE driver, `NO_OSFS`
+format/mount, and the save/read/delete/stat/list builtins work and persist
+across reboot; running a saved `.noc` script from disk is the remaining piece.
+The "AI-assisted" part of the roadmap — a kernel-resident micro-transformer
+that learns from your NOC history, drafts programs, and runs them sandboxed —
+is milestone M5, which builds on the M4 filesystem for model and corpus
+persistence.

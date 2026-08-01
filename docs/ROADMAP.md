@@ -51,9 +51,19 @@ _(CLI-first foundation: sandboxed NOC processes are what make self-evolution saf
 
 ## M4 — Filesystem
 _(persists the NOC corpus and the trained model across reboot)_
-- [ ] QEMU IDE disk driver
-- [ ] Own FAT-like FS (RedSea homage)
-- [ ] Save/load/run `.noc` scripts across reboot
+- [x] QEMU IDE PIO driver + LBA0 self-test
+- [x] Own FAT-like FS (`NO_OSFS`, RedSea homage): dual superblocks, bitmap
+      allocator, fixed inode table, linear directory
+- [x] Builtin FS commands: `FormatDisk`/`SaveFile`/`ReadFile`/`DeleteFile`/
+      `ListDir`/`StatFile`; short-block I/O is padding-safe (no reads past the
+      caller's buffer)
+- [x] Persistence across reboot: harness saves a file, `system_reset`, and
+      verifies the second boot mounts without re-formatting and reads it back
+- [ ] Run `.noc` scripts straight from the filesystem (load to the REPL /
+      `source` command) — saving/reading bytes works, executing a saved
+      program from disk does not yet
+- [x] Accept: harness covers format/save/stat/list/read/delete plus
+      reboot persistence and reports `TEST PASS`
 
 ## M5 — ML/LLM & self-evolution (CLI-first)
 - [ ] Kernel-side micro-ANN: page/swap prefetcher + command predictor that
