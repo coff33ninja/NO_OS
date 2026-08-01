@@ -62,6 +62,7 @@ $csrcs = @(
     'mm\pmm.c'
     'mm\heap.c'
     'mm\vmm.c'
+    'mm\pgpred.c'
     'fs\noosfs.c'
     'arch\x86_64\gdt.c'
     'arch\x86_64\tss.c'
@@ -625,6 +626,37 @@ function Invoke-Test {
         Send-Keys "Predict;`n"
         if (-not (Wait-LogPattern 'predict: 7\*7;')) {
             throw 'Predict did not suggest the most frequent follower'
+        }
+
+        # ---- M5: page-access predictor (prefetcher learning half) ----
+        # Spawn user processes that deliberately fault on a known address
+        # sequence. Each fault is recorded by the predictor before the process
+        # is killed, so PgPred; must suggest the page that follows the last
+        # fault. Fault stream: 0x400000 0x500000 0x400000 0x500000 0x400000
+        #   bigrams: 0x400000->0x500000 x2, last = 0x400000 => pgpred 0x500000
+        Send-Keys "Spawn(`"PageFault(0x400000);`");`n"
+        if (-not (Wait-LogPattern 'killed: Page Fault')) {
+            throw 'page-fault proc 1 did not fault and die'
+        }
+        Send-Keys "Spawn(`"PageFault(0x500000);`");`n"
+        if (-not (Wait-LogPattern 'killed: Page Fault')) {
+            throw 'page-fault proc 2 did not fault and die'
+        }
+        Send-Keys "Spawn(`"PageFault(0x400000);`");`n"
+        if (-not (Wait-LogPattern 'killed: Page Fault')) {
+            throw 'page-fault proc 3 did not fault and die'
+        }
+        Send-Keys "Spawn(`"PageFault(0x500000);`");`n"
+        if (-not (Wait-LogPattern 'killed: Page Fault')) {
+            throw 'page-fault proc 4 did not fault and die'
+        }
+        Send-Keys "Spawn(`"PageFault(0x400000);`");`n"
+        if (-not (Wait-LogPattern 'killed: Page Fault')) {
+            throw 'page-fault proc 5 did not fault and die'
+        }
+        Send-Keys "PgPred;`n"
+        if (-not (Wait-LogPattern 'pgpred: 0x500000')) {
+            throw 'PgPred did not predict the next page from fault history'
         }
 
         # Deliberate fault as the final check: #UD must trap, not triple-fault.

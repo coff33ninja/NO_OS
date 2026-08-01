@@ -3,6 +3,7 @@
 #include "sched.h"
 #include "syscall.h"
 #include "gdt.h"
+#include "pgpred.h"
 
 #define EXC_COUNT 32
 
@@ -34,6 +35,7 @@ static void isr_panic(u64 vector, u64 error, struct regs *r)
     if (vector == 14) { /* page fault */
         u64 cr2;
         __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        pgpred_fault(cr2);
         printk("    CR2 (fault address)=0x%llx\n", cr2);
     }
     printk("    RIP=0x%llx CS=0x%x RFLAGS=0x%llx RSP=0x%llx\n",
@@ -61,6 +63,7 @@ void isr_dispatch(u64 vector, u64 error, struct regs *r)
             if (vector == 14) { /* page fault */
                 u64 cr2;
                 __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+                pgpred_fault(cr2);
                 printk("  cr2=0x%llx\n", cr2);
             }
             sched_exit_user(r, -1);

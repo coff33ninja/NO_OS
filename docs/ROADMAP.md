@@ -71,7 +71,11 @@ _(persists the NOC corpus and the trained model across reboot)_
       learns user patterns (the memory-discipline core)
   - [x] NOC next-command predictor: bigram over the REPL command history
         (`Predict;`/`Hist;`/`ClearHist;`) with unigram fallback
-  - [ ] Page/swap prefetcher from access patterns
+  - [x] Page-access predictor core: bigram over the page-fault stream
+        (`PgPred;`), fed by the page-fault dispatcher; `PageFault(addr);`
+        deliberately faults a spawned user process for testing
+  - [ ] Prefetch action (pre-map/pre-load the predicted page) once demand
+        paging / swap exist
 - [ ] Model weights are shared read-only pages, demand-paged from disk and
       evictable under pressure; `model_budget(n)` syscall enforces a hard
       memory cap per LLM process

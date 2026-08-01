@@ -9,6 +9,7 @@
 #include "heap.h"
 #include "fs.h"
 #include "predict.h"
+#include "pgpred.h"
 #endif
 
 #define NOC_STACK_SIZE 4096
@@ -677,6 +678,20 @@ static bool b_Len(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+/* Deliberate user-mode page fault: store to the given address. The page-fault
+   analogue of FaultTest; only meaningful inside a spawned user process, where
+   the fault is recorded by the predictor and the process is killed. */
+static bool b_PageFault(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)ret;
+    if (n < 1)
+        return false;
+    volatile u64 *p = (volatile u64 *)args[0];
+    *p = 0xDEADBEEF;
+    return true;
+}
+
 static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
 {
     (void)vm;
@@ -684,9 +699,9 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
     (void)n;
     noc_os_puts("commands: Help, Version, MemInfo, Echo, FaultTest, Reboot, "
                 "Print, PrintLn, Sleep, Time, KeyGet, KeyPressed, Alloc, Free, "
-                "MemSet, MemCpy, Len, Spawn, Ps, Demo, SaveFile, ReadFile, "
-                "DeleteFile, ListDir, StatFile, FormatDisk, Run, Predict, "
-                "Hist, ClearHist\n");
+                "MemSet, MemCpy, Len, PageFault, Spawn, Ps, Demo, SaveFile, "
+                "ReadFile, DeleteFile, ListDir, StatFile, FormatDisk, Run, "
+                "Predict, Hist, ClearHist, PgPred\n");
     *ret = 0;
     return true;
 }
@@ -1086,6 +1101,27 @@ static bool b_ClearHist(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_PgPred(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    char buf[96];
+    for (usize i = 1; i <= pgpred_count(); i++) {
+        sprintk(buf, sizeof(buf), "pg %u: 0x%llx\n", (unsigned)(i - 1),
+                pgpred_entry(i) << 12);
+        noc_os_puts(buf);
+    }
+    u64 p = pgpred_predict();
+    if (p)
+        sprintk(buf, sizeof(buf), "pgpred: 0x%llx\n", p << 12);
+    else
+        sprintk(buf, sizeof(buf), "pgpred: (no history)\n");
+    noc_os_puts(buf);
+    *ret = 0;
+    return true;
+}
+
 #endif /* !NOOS_USER */
 
 const noc_builtin noc_builtins[] = {
@@ -1100,6 +1136,7 @@ const noc_builtin noc_builtins[] = {
     { "MemSet",     NTYPE_VOID, 3, false, b_MemSet },
     { "MemCpy",     NTYPE_VOID, 3, false, b_MemCpy },
     { "Len",        NTYPE_I64,  1, false, b_Len },
+    { "PageFault",  NTYPE_I64,  1, false, b_PageFault },
     { "Help",       NTYPE_VOID, 0, false, b_Help },
 #ifndef NOOS_USER
     { "Echo",       NTYPE_VOID, 1, false, b_Echo },
@@ -1120,6 +1157,7 @@ const noc_builtin noc_builtins[] = {
     { "Predict",    NTYPE_VOID, 0, false, b_Predict },
     { "Hist",       NTYPE_VOID, 0, false, b_Hist },
     { "ClearHist",  NTYPE_VOID, 0, false, b_ClearHist },
+    { "PgPred",     NTYPE_VOID, 0, false, b_PgPred },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);
