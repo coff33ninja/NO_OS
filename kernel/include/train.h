@@ -18,4 +18,11 @@ void train_stats(char *buf, usize cap);
 u32  train_set_idle_secs(u32 secs);
 u32  train_idle_secs(void);
 
+/* Forget all learned transitions and reset the lifetime counters. */
+void train_reset(void);
+
+/* Greedy next-byte generation from the trained bigram table, continuing the
+   seed (ties -> lowest byte value). Writes the continuation only. */
+usize train_generate(char *out, usize cap, const char *seed, usize seedlen);
+
 #endif

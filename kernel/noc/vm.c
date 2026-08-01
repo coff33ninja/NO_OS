@@ -723,7 +723,7 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
                 "Spawn, Ps, Demo, SaveFile, ReadFile, DeleteFile, ListDir, "
                 "StatFile, FormatDisk, Run, Predict, Hist, ClearHist, PgPred, "
                 "ModelInfo, LogInfo, LogDump, LogSave, LogClear, "
-                "Train, TrainIdle\n");
+                "Train, TrainIdle, TrainReset, PredictBigram\n");
     *ret = 0;
     return true;
 }
@@ -1183,6 +1183,46 @@ static bool b_TrainIdle(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_TrainReset(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    train_reset();
+    noc_os_puts("model: reset\n");
+    *ret = 0;
+    return true;
+}
+
+static bool b_PredictBigram(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    const char *seed = (const char *)args[0];
+    usize sl = 0;
+    while (seed[sl])
+        sl++;
+    char buf[160];
+    usize o = 0;
+    if (sl + 7 < sizeof(buf)) {
+        static const char pfx[] = "pred: ";
+        for (usize i = 0; i < sizeof(pfx) - 1; i++)
+            buf[o++] = pfx[i];
+        for (usize i = 0; i < sl; i++)
+            buf[o++] = seed[i];
+        buf[o] = '\0';
+        o += train_generate(buf + o, sizeof(buf) - o - 1, seed, sl);
+        buf[o] = '\0';
+    } else {
+        buf[0] = '\0';
+    }
+    noc_os_puts(buf);
+    noc_os_putc('\n');
+    *ret = 0;
+    return true;
+}
+
 static bool b_LogInfo(void *vm, u64 *args, usize n, u64 *ret)
 {
     (void)vm;
@@ -1271,6 +1311,8 @@ const noc_builtin noc_builtins[] = {
     { "LogClear",   NTYPE_VOID, 0, false, b_LogClear },
     { "Train",      NTYPE_VOID, 0, false, b_Train },
     { "TrainIdle",  NTYPE_VOID, 1, false, b_TrainIdle },
+    { "TrainReset", NTYPE_VOID, 0, false, b_TrainReset },
+    { "PredictBigram", NTYPE_VOID, 1, false, b_PredictBigram },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);

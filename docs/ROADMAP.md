@@ -101,9 +101,15 @@ _(persists the NOC corpus and the trained model across reboot)_
         has been idle past a threshold (default 30 s) and >= 64 new log
         bytes have arrived; `Train;` forces a pass and reports integer
         fixed-point cross-entropy loss, `TrainIdle(<secs>);` lowers the
-        trigger for testing, `ModelInfo` shows lifetime stats. (Real
-        transformer, held-out evaluation, and model-drafted code deferred
-        to later M5 work.)
+        trigger for testing, `ModelInfo` shows lifetime stats
+  - [x] Generate from the trained model: `PredictBigram(<seed>);` greedily
+        argmax-follows the last seed byte through the bigram table (tie ->
+        lowest byte, so output is deterministic), stopping at unknown
+        transitions; verified against a clean controlled corpus, where from
+        seed `xyz` it reproduces the interaction-log byte structure
+        (`pred: xyz\n[CK] Prin(")` — `[CMD]`'s C->M ties `[TICK]`'s C->K
+        and the lowest byte wins). (Real transformer, held-out evaluation,
+        and model-drafted code deferred to later M5 work.)
 - [ ] Accept: the model predicts the next command from history; a
       model-drafted NOC program runs and its result shows in the shell
 

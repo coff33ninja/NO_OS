@@ -135,6 +135,19 @@ The kernel append-logs to `/var/interact.log` (pre-allocated circular buffer):
 > transformer, 1-4 fixed passes rather than SGD steps, `≥64` new bytes
 > rather than `≥1024`, no held-out validation yet.
 
+> **Status (slice 7):** generation is in — `PredictBigram(<seed>);`
+> (`kernel/noc/train.c:train_generate`) greedily argmax-follows the last
+> seed byte through the trained table (`w[prev<<8|next]`), breaking ties
+> toward the lowest byte so output is deterministic, and stops when no
+> transition is known. `train_reset()` zeroes the weights so the harness can
+> fit a clean, controlled corpus. Verified against exactly that: after
+> `TrainReset; LogClear;` + five `PrintLn("xyz");` + `Train;`, seeding
+> `PredictBigram("xyz")` emits `pred: xyz\n[CK] Prin(")` — `z`->`\n` (the
+> `[OUT] xyz` records beat `"`), `[`, `C` (tie among `[TICK]/[CMD]/[OUT]`,
+> lowest byte wins), `K` (`[TICK]`'s C->K ties `[CMD]`'s C->M and `K`<`M`),
+> then ` Prin(")` — i.e. the model faithfully reproduces the interaction
+> log's byte structure from a 3-byte seed.
+
 ### 4.3. Model Updates
 - New weights written to temporary file
 - On successful validation: atomic swap with current model file

@@ -161,3 +161,43 @@ void train_stats(char *buf, usize cap)
             (unsigned)(((last_loss_mbit % 1000) / 10) % 10),
             (unsigned)idle_secs);
 }
+
+/* Forget all learned transitions and reset the lifetime counters. Used by
+   the harness to build a clean, controlled corpus for generation tests. */
+void train_reset(void)
+{
+    for (usize i = 0; i < 65536; i++)
+        w[i] = 0;
+    train_passes = 0;
+    train_bytes = 0;
+    last_loss_mbit = 0;
+}
+
+/* Greedy next-byte generation from the trained bigram table: at each step
+   pick the max-weight follower of the previous byte (ties -> lowest byte
+   value, so generation is deterministic), stopping at the cap or when no
+   transition is known. Returns the number of bytes written; the output is
+   the continuation only, the seed is not echoed. */
+usize train_generate(char *out, usize cap, const char *seed, usize seedlen)
+{
+    if (cap == 0 || seedlen == 0)
+        return 0;
+    u8 prev = (u8)seed[seedlen - 1];
+    usize o = 0;
+    while (o < cap) {
+        u8 next = 0;
+        u32 best = 0;
+        const u8 *row = &w[(usize)prev * 256];
+        for (u32 c = 0; c < 256; c++) {
+            if (row[c] > best) {
+                best = row[c];
+                next = (u8)c;
+            }
+        }
+        if (best == 0)
+            break;
+        out[o++] = next;
+        prev = next;
+    }
+    return o;
+}

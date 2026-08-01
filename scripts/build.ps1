@@ -160,7 +160,11 @@ function Invoke-Build {
     # bare file (nocproc.bin -> _binary_nocproc_bin_start/_end).
     Push-Location $buildDir
     try {
-        & $oc.Source -O binary user.elf nocproc.bin
+        # GNU objcopy (binutils 2.46) mis-sizes flat output for the 1 TiB
+        # user VMA: it pre-extends the file to the raw section address instead
+        # of base-subtracting, so the write fails with ENOSPC. zig's LLVM
+        # objcopy base-subtracts correctly.
+        & zig objcopy -O binary user.elf nocproc.bin
         if ($LASTEXITCODE -ne 0) { throw 'user objcopy binary failed' }
         & $oc.Source -I binary -O elf64-x86-64 -B i386 nocproc.bin nocproc_blob.o
         if ($LASTEXITCODE -ne 0) { throw 'user blob objcopy failed' }
@@ -790,6 +794,50 @@ function Invoke-Test {
             throw 'idle retrain did not fire after the idle threshold elapsed'
         }
 
+        # ---- M5: generate from the trained byte-bigram model ----
+        # TrainReset + LogClear build a clean controlled corpus of 5 copies of
+        # one command; Train; then fits the model to exactly that text.
+        # The [CMD]/[OUT] records live only in the interaction-log ring, so the
+        # serial stream shows the bare PrintLn output ("xyz" on its own line),
+        # never "[OUT] ..." -- wait on those bare output lines instead.
+        # PredictBigram seeds greedy next-byte generation from "xyz". Each
+        # command contributes exactly one "[TICK]" (C->K) and one "[CMD]"
+        # (C->M) record, so on 'C' those counts tie and the lowest byte wins
+        # ('K' < 'M'). The model must therefore emit '\n' after 'z' (xyz\n
+        # from the [OUT] records, beating '"'), then '[CK] Prin("' -- proving
+        # the weights genuinely learned the interaction log.
+        $baseT = Get-Log
+        Send-Keys "TrainReset;`n"
+        if (-not (Wait-Appended $baseT 'model: reset')) {
+            throw 'TrainReset did not run'
+        }
+        Send-Keys "LogClear;`n"
+        if (-not (Wait-Appended $baseT 'log: cleared')) {
+            throw 'LogClear did not run'
+        }
+        $baseC = Get-Log
+        foreach ($i in 1..5) {
+            Send-Keys "PrintLn(`"xyz`");`n"
+            Start-Sleep -Milliseconds 250
+        }
+        if (-not (Wait-Appended $baseC '(?m)^xyz$')) {
+            throw 'seed PrintLn commands did not run'
+        }
+        $nxyz = [regex]::Matches((Get-Log).Substring($baseC.Length), '(?m)^xyz$').Count
+        if ($nxyz -lt 5) {
+            throw "seed PrintLn outputs: expected 5, saw $nxyz (dropped keystrokes?)"
+        }
+        $baseT = Get-Log
+        Send-Keys "Train;`n"
+        if (-not (Wait-Appended $baseT 'train: ok \(\d+ passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)')) {
+            throw 'Train did not run on the controlled corpus'
+        }
+        $baseP = Get-Log
+        Send-Keys "PredictBigram(`"xyz`");`n"
+        if (-not (Wait-Appended $baseP 'pred: xyz\n\[CK\] Prin\("')) {
+            throw 'PredictBigram did not generate the expected continuation'
+        }
+
         # Deliberate fault as the final check: #UD must trap, not triple-fault.
         Send-Keys "FaultTest`n"
         if (-not (Wait-LogPattern 'EXCEPTION: Invalid Opcode')) {
@@ -798,7 +846,7 @@ function Invoke-Test {
 
         $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
         Write-Host $content
-        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), and fault trapping all verified'
+        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), bigram generation from the trained model, and fault trapping all verified'
         exit 0
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
