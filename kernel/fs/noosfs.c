@@ -415,7 +415,13 @@ int fs_write_file(u32 ino, const void *data, u64 size)
                 return -1;
             in.blocks[i] = c;
         }
-        if (fs_cluster_write(in.blocks[i], p + i * FS_BLOCK_SIZE) != 0)
+        u8 tmp[FS_BLOCK_SIZE];
+        u64 off = (u64)i * FS_BLOCK_SIZE;
+        u64 chunk = size - off < FS_BLOCK_SIZE ? size - off : FS_BLOCK_SIZE;
+        memcpy(tmp, p + off, chunk);
+        if (chunk < FS_BLOCK_SIZE)
+            memset(tmp + chunk, 0, FS_BLOCK_SIZE - chunk);
+        if (fs_cluster_write(in.blocks[i], tmp) != 0)
             return -1;
     }
     in.size = size;
@@ -433,12 +439,14 @@ u64 fs_read_file(u32 ino, void *buf, u64 max)
     u64 want = in.size < max ? in.size : max;
     u8 *p = (u8 *)buf;
     u64 left = want;
+    u8 tmp[FS_BLOCK_SIZE];
     for (u32 i = 0; left && i < FS_MAX_BLOCKS; i++) {
         if (!in.blocks[i])
             break;
         u64 chunk = left < FS_BLOCK_SIZE ? left : FS_BLOCK_SIZE;
-        if (fs_cluster_read(in.blocks[i], p) != 0)
+        if (fs_cluster_read(in.blocks[i], tmp) != 0)
             return (u64)(p - (u8 *)buf);
+        memcpy(p, tmp, chunk);
         p += chunk;
         left -= chunk;
     }

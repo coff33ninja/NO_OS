@@ -24,14 +24,6 @@ static usize align16(usize n)
 static void heap_validate(const char *after)
 {
     usize steps = 0;
-    /* invariant: boot-time builtin struct at 0x152000 must stay 720/allocated */
-    block *fmt = (block *)0x152000;
-    if (fmt->magic == HDR_MAGIC &&
-        (fmt->size != 720 || fmt->free != false)) {
-        printk("heap: BUILTIN-STRUCT CHANGED after %s: size=%u free=%d "
-               "next=%p\n", after, (u32)fmt->size, fmt->free,
-               (void *)fmt->next);
-    }
     for (block *p = head; p; p = p->next) {
         if (p->next && (u8 *)p->next < (u8 *)p) {
             printk("heap: LIST BACKWARD after %s, block=%p next=%p\n",

@@ -152,9 +152,6 @@ static i32 add_string(ccomp *c, const char *s)
     }
     memcpy(copy, s, len + 1);
     fn->strings[fn->nstrings++] = copy;
-    noc_os_puts("DBG: STR alloc '");
-    noc_os_puts(s);
-    noc_os_puts("'\n");
     return (i32)(fn->nstrings - 1);
 }
 

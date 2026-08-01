@@ -72,12 +72,6 @@ noc_fn *noc_register_builtin(const char *name, u32 ret_type, u32 nargs,
     f->nargs = nargs;
     f->variadic = variadic;
     f->builtin = builtin_index;
-    {
-        char dbg[128];
-        sprintk(dbg, sizeof(dbg), "DBG: builtin '%s' struct=%p name=%p\n",
-                name, f, (void *)nm);
-        noc_os_puts(dbg);
-    }
     return noc_register_user_fn(f);
 }
 
