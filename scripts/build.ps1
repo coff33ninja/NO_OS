@@ -1243,17 +1243,20 @@ function Invoke-Test {
         if (-not $mSlots.Success) { throw 'swap init did not report the slot count' }
         $swapTotal = $mSlots.Groups[1].Value
         $baseSw = Get-Log
-        Send-Keys "Spawn(`"p=Alloc(64);MemSet(p,65,63);MemSet(p+63,0,1);r=SwapOut(p);SwapInfo();v=Len(p);PrintLn(v);SwapInfo();if(r==0)PrintLn(`\`"SWAP-OK`\`")else PrintLn(`\`"SWAP-FAIL`\`");`");`n"
-        if (-not (Wait-Appended $baseSw "swap: 1/$swapTotal slots, [0-9]+ out, [0-9]+ in, [0-9]+ reclaim")) {
-            throw 'SwapOut did not evict the page to the swap region'
+        Send-Keys "Spawn(`"Str p = Alloc(64); MemSet(p, 65, 63); MemSet(p+63, 0, 1); I64 r = SwapOut(p); SwapInfo(); I64 v = Len(p); PrintLn(`\`"%d`\`", v); SwapInfo(); if(r==0) PrintLn(`\`"SWAP-OK`\`"); else PrintLn(`\`"SWAP-FAIL`\`");`");`n"
+        # The spawned process runs its bytecode from the user heap, so evicting
+        # p's heap page faults it back in on the very next instruction fetch;
+        # the transient "1 slot used" state is therefore not reliably
+        # observable. Assert the deterministic round-trip instead: at least one
+        # eviction (out), at least one transparent fault-in (in), and the slot
+        # freed again (0 used) by the time the process prints its stats.
+        if (-not (Wait-Appended $baseSw "swap: 0/$swapTotal slots, [1-9][0-9]* out, [1-9][0-9]* in, [0-9]+ reclaim")) {
+            throw 'SwapOut did not evict then transparently fault back in a page'
         }
-        if (-not (Wait-Appended $baseSw '`n63`n')) {
+        if (-not (Wait-Appended $baseSw "`n63`n")) {
             throw 'swap-in did not restore the exact bytes (Len != 63)'
         }
-        if (-not (Wait-Appended $baseSw "swap: 0/$swapTotal slots, [0-9]+ out, [0-9]+ in, [0-9]+ reclaim")) {
-            throw 'swap-in did not free the swap slot'
-        }
-        if (-not (Wait-Appended $baseSw 'SWAP-OK')) {
+        if (-not (Wait-Appended $baseSw "`nSWAP-OK`n")) {
             throw 'SwapOut return was not 0 and/or the process died on swap-in'
         }
 
