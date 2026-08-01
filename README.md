@@ -1,6 +1,4 @@
 
-# NO_OS
-
 ---
 ```
  _   _     ___     ____     ___      ____ 
@@ -11,7 +9,6 @@
 - an OS that grows a brain, not a manual -
 ```
 ---
-
 A from-scratch operating system for x86-64 that learns its users and writes
 its own programs. **NO_OS** is TempleOS-inspired in soul — a single language
 (**NOC**) is the shell, the app framework, and the training corpus — but built
@@ -119,7 +116,6 @@ Mul2(40, 5);     // 200
 for (I64 i = 0; i < 5; i++) { Print("%d ", i); }   // 0 1 2 3 4
 ```
 ---
-
 Bare identifiers auto-call: `Version` runs `Version()`. Every command line is
 lexed → parsed → compiled to bytecode → run on a stack VM. Functions defined
 at the prompt persist for the session — later lines can call them.
@@ -145,7 +141,6 @@ no/os>  0  ready  kern  repl
 no/os>  1  ready  user  corp0001.noc
 ```
 ---
-
 ### Builtin surface
 
 The whole OS is exposed as NOC builtins — no hidden admin prompt:
@@ -195,7 +190,6 @@ scripts/         build.ps1, run-qemu.ps1
 docs/            SPEC, ROADMAP, NOC, M3/M4/M5/M8, ADR/, memory docs
 ```
 ---
-
 Key decisions are recorded as ADRs in
 [`docs/ADR/`](docs/ADR/) — stack VM over register VM (ADR-0001), no network
 stack (ADR-0002), and the `objcopy` ELF-reframe trick that lets QEMU's
@@ -228,7 +222,6 @@ make test      # headless boot; harness drives the keyboard and asserts output
 make clean     # wipe build/
 ```
 ---
-
 Or call the driver directly:
 `pwsh -NoProfile -File scripts/build.ps1 -Action test`.
 
