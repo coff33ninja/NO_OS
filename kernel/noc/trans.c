@@ -6,6 +6,7 @@
 #include "string.h"
 #include "printk.h"
 #include "model.h"
+#include "pit.h"
 
 /* M5 micro-transformer (integer fixed-point, no float): byte-level,
    decoder-only, causal multi-head self-attention + FFN + layer norm,
@@ -30,6 +31,12 @@
 
 #define TRANS_BATCH 4096
 #define TRANS_MIN   4
+#define TRANS_IDLE_NEW_MIN 64 /* new log bytes that justify an idle retrain */
+
+/* idle-retrain trigger (mirrors kernel/noc/train.c); train_watermark is
+   refreshed by every trans_train, so it doubles as the idle new-bytes gate */
+static u32  tr_idle_secs = 30;  /* idle threshold, M5 spec: 30 s */
+static u64  tr_last_input_tick;
 
 /* ------------------------------------------------------------------ */
 /* config + RAM-derived budgets                                        */
@@ -1088,6 +1095,40 @@ u32 trans_eval(void)
     return acc;
 }
 
+/* idle-retrain interface (mirrors train.c): kbd polls these so the
+   micro-transformer keeps training itself from the interaction log while
+   the machine sits idle. trans_train caps to 1 pass so the idle loop stays
+   responsive; the watermark gate means it only fires on genuinely new
+   bytes. */
+void trans_note_input(void)
+{
+    tr_last_input_tick = pit_ticks();
+}
+
+u32 trans_set_idle_secs(u32 secs)
+{
+    if (secs < 1)
+        secs = 1;
+    tr_idle_secs = secs;
+    return secs;
+}
+
+u32 trans_idle_secs(void)
+{
+    return tr_idle_secs;
+}
+
+void trans_poll_idle(void)
+{
+    if (tr_last_input_tick == 0)
+        return;
+    if ((u64)pit_ticks() - tr_last_input_tick < (u64)tr_idle_secs * 100)
+        return;
+    if (il_len_bytes() < train_watermark + TRANS_IDLE_NEW_MIN)
+        return;
+    trans_train("idle", TRANS_BATCH, 1);
+}
+
 
 
 /* ------------------------------------------------------------------ */
@@ -1328,6 +1369,7 @@ void trans_init(void)
     model_window_setup();
     train_watermark = il_len_bytes();
     last_loss_mbit = 0;
+    tr_last_input_tick = pit_ticks();
 }
 
 void trans_reset(void)
@@ -1414,12 +1456,13 @@ void trans_info(char *buf, usize cap)
     sprintk(buf, cap,
             "trans: model L=%u ctx=%u d=%u ff=%u heads=%u "
             "pages=%u weights=%u KB acap=%u KB wbudget=%u KB "
-            "trained=%u passes %u bytes loss=%u.%u%u bits/byte\n",
+            "idle=%u s trained=%u passes %u bytes loss=%u.%u%u bits/byte\n",
             (unsigned)cfg.n_layers, (unsigned)cfg.ctx,
             (unsigned)cfg.d_model, (unsigned)cfg.d_ff,
             (unsigned)cfg.n_heads, (unsigned)trans_weight_pages(),
             (unsigned)(wbytes / 1024), (unsigned)trans_activ_cap_kb(),
             (unsigned)wbudget_kb,
+            (unsigned)tr_idle_secs,
             (unsigned)train_passes, (unsigned)train_bytes,
             (unsigned)(last_loss_mbit / 1000),
             (unsigned)((last_loss_mbit % 1000) / 100),

@@ -756,7 +756,7 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
                 "Train, TrainIdle, TrainReset, PredictBigram, DraftRun, "
                 "CorpusInfo, CorpusRollback, "
                 "TransInfo, TransMem, TransConfig, TransPredict, "
-                "TransTrain, TransEval, TransReset\n");
+                "TransTrain, TransEval, TransReset, TransIdle\n");
     *ret = 0;
     return true;
 }
@@ -1462,6 +1462,19 @@ static bool b_TransReset(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_TransIdle(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    u32 secs = trans_set_idle_secs((u32)args[0]);
+    char buf[64];
+    sprintk(buf, sizeof(buf), "trans: idle threshold %u s\n", (unsigned)secs);
+    noc_os_puts(buf);
+    *ret = 0;
+    return true;
+}
+
 #endif /* !NOOS_USER */
 
 const noc_builtin noc_builtins[] = {
@@ -1522,6 +1535,7 @@ const noc_builtin noc_builtins[] = {
     { "TransTrain",   NTYPE_I64,  2, true,  b_TransTrain },
     { "TransEval",    NTYPE_I64,  0, false, b_TransEval },
     { "TransReset",   NTYPE_VOID, 0, false, b_TransReset },
+    { "TransIdle",    NTYPE_VOID, 1, false, b_TransIdle },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);

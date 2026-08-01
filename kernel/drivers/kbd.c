@@ -4,6 +4,7 @@
 #include "pic.h"
 #include "sched.h"
 #include "train.h"
+#include "trans.h"
 
 #define KBD_DATA 0x60
 #define BUF_SIZE 256
@@ -147,6 +148,7 @@ int kbd_getc(void)
     char c = (char)buf[tail];
     tail = (u16)((tail + 1) % BUF_SIZE);
     train_note_input();         /* user is typing; refresh the idle clock */
+    trans_note_input();
     return (int)(u8)c;
 }
 
@@ -164,6 +166,7 @@ int kbd_readc(void)
         sched_yield_to_user(); /* let user tasks run while the shell waits */
         __asm__ volatile("sti; hlt");
         train_poll_idle();     /* idle retrain fires while no keys arrive */
+        trans_poll_idle();
     }
     return c;
 }

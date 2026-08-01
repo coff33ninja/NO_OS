@@ -94,4 +94,12 @@ u32 trans_train(const char *why, usize max_bytes, usize max_passes);
 /* Report in-corpus top-1 next-byte accuracy (percent) plus average loss. */
 u32 trans_eval(void);
 
+/* Idle-retrain interface (mirrors train.c): kbd polls these so the
+   micro-transformer keeps training itself from the log while the machine
+   sits idle. */
+void trans_note_input(void);
+u32 trans_set_idle_secs(u32 secs);
+u32 trans_idle_secs(void);
+void trans_poll_idle(void);
+
 #endif

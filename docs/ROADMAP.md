@@ -114,6 +114,12 @@ _(persists the NOC corpus and the trained model across reboot)_
         `TransReset;` re-randomizes deterministically — reset + identical
         log reproduces the identical loss (harness-verified, loss 8.09
         bits/byte on both runs)
+  - [x] Transformer idle auto-retrain: `trans_poll_idle` (mirrors
+        `train_poll_idle`) is polled from `kbd_readc` alongside the bigram
+        and fires `trans_train("idle", TRANS_BATCH, 1)` after the `TransIdle`
+        threshold (default 30 s) AND >= 64 new log bytes past the watermark;
+        `TransIdle(<secs>);` lowers the trigger for testing and `trans_info`
+        reports `idle=N s` (harness-verified auto-fire)
 - [ ] Self-evolution loop: log interactions -> idle retrain -> model drafts
       NOC code -> runs sandboxed -> output feeds the (versioned,
       rollback-safe) corpus

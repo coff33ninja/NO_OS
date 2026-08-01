@@ -1136,6 +1136,31 @@ function Invoke-Test {
             throw 'TransPredict did not answer after training'
         }
 
+        # ---- M5: transformer idle auto-retrain loop ----
+        # TransIdle lowers the idle trigger threshold (like TrainIdle for the
+        # bigram) so the harness can prove the micro-transformer retrains
+        # itself from the log without waiting 30 s. New corpus bytes must
+        # accumulate past the train watermark, then the poll fires while the
+        # machine sits idle (1 pass, bounded latency).
+        $baseI = Get-Log
+        Send-Keys "TransIdle(1);`n"
+        if (-not (Wait-Appended $baseI 'trans: idle threshold 1 s')) {
+            throw 'TransIdle did not set the transformer idle threshold'
+        }
+        $baseF = Get-Log
+        foreach ($i in 1..8) {
+            Send-Keys "PrintLn(`"CDCDCDCD`");`n"
+            if (-not (Wait-Appended $baseF 'CDCDCDCD')) {
+                throw "trans idle corpus line #$i did not echo"
+            }
+            $baseF = Get-Log
+        }
+        $baseW = Get-Log
+        Start-Sleep -Seconds 2   # sit idle past the 1 s threshold
+        if (-not (Wait-Appended $baseW 'trans: train idle \(\d+ passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)' 30)) {
+            throw 'transformer idle retrain did not fire after the idle threshold elapsed'
+        }
+
         # Deliberate fault as the final check: #UD must trap, not triple-fault.
         Send-Keys "FaultTest`n"
         if (-not (Wait-LogPattern 'EXCEPTION: Invalid Opcode')) {
@@ -1144,7 +1169,7 @@ function Invoke-Test {
 
         $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
         Write-Host $content
-        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), bigram generation from the trained model, model-drafted NOC program spawned as a ring-3 user process with output reaching the shell, demand-paged read-only transformer weight pages (fault-in, write-trap, budget eviction/refault), deterministic fixed-point transformer training/eval (TransTrain/TransEval/TransReset), and fault trapping all verified'
+        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), bigram generation from the trained model, model-drafted NOC program spawned as a ring-3 user process with output reaching the shell, demand-paged read-only transformer weight pages (fault-in, write-trap, budget eviction/refault), deterministic fixed-point transformer training/eval (TransTrain/TransEval/TransReset), transformer idle auto-retrain (TransIdle trigger fires), and fault trapping all verified'
         exit 0
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }

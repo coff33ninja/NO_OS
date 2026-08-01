@@ -213,6 +213,17 @@ The kernel append-logs to `/var/interact.log` (pre-allocated circular buffer):
 > (loss 8.09 bits/byte on both runs). Backprop buffers are lazily allocated
 > (`alloc_train`) and freed on reconfigure/reset; `working_kb` tracks the
 > real footprint.
+>
+> **Status (slice 12):** the transformer now joins the idle-retrain loop.
+> `trans_note_input`/`trans_poll_idle` mirror `train.c` and are polled from
+> `kbd_readc`'s input-wait loop alongside the bigram (`kernel/drivers/kbd.c`);
+> `trans_poll_idle` fires `trans_train("idle", TRANS_BATCH, 1)` only after
+> the `TransIdle` threshold (default 30 s) has elapsed AND ≥64 new log bytes
+> arrived past the train watermark, so each idle pass is bounded (1 pass)
+> and only runs on genuinely new material. `TransIdle(<secs>);` sets the
+> threshold (mirrors `TrainIdle`); `trans_info` now reports `idle=N s`.
+> Harness-verified: threshold lowered to 1 s, fresh corpus typed, and the
+> `trans: train idle (...)` line fired automatically without any command.
 
 ### 4.3. Model Updates
 - New weights written to temporary file
