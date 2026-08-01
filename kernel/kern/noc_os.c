@@ -1,4 +1,5 @@
 #include "noc_os.h"
+#include "interact.h"
 #include "heap.h"
 #include "pit.h"
 #include "kbd.h"
@@ -18,6 +19,7 @@ void noc_os_free(void *p)
 
 void noc_os_putc(char c)
 {
+    il_capture_putc(c);
     if (c == '\n')
         serial_putc('\r');
     serial_putc(c);

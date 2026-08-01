@@ -15,6 +15,7 @@
 #include "ide.h"
 #include "fs.h"
 #include "noc.h"
+#include "interact.h"
 
 static void fs_selftest(void)
 {
@@ -176,6 +177,8 @@ void kmain(u32 mb_info)
            (unsigned)(pit_ticks() - t0));
 
     kbd_echo_test();
+
+    il_load();
 
     noc_repl();
 

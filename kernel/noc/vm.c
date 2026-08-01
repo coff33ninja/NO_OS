@@ -10,6 +10,7 @@
 #include "fs.h"
 #include "predict.h"
 #include "pgpred.h"
+#include "interact.h"
 #endif
 
 #define NOC_STACK_SIZE 4096
@@ -720,7 +721,7 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
                 "MemSet, MemCpy, Len, PageFault, ModelBudget, ModelCommit, "
                 "Spawn, Ps, Demo, SaveFile, ReadFile, DeleteFile, ListDir, "
                 "StatFile, FormatDisk, Run, Predict, Hist, ClearHist, PgPred, "
-                "ModelInfo\n");
+                "ModelInfo, LogInfo, LogDump, LogSave, LogClear\n");
     *ret = 0;
     return true;
 }
@@ -1155,6 +1156,49 @@ static bool b_ModelInfo(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_LogInfo(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    char buf[96];
+    il_stats(buf, sizeof(buf));
+    noc_os_puts(buf);
+    *ret = 0;
+    return true;
+}
+
+static bool b_LogDump(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    il_dump();
+    *ret = 0;
+    return true;
+}
+
+static bool b_LogSave(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    il_save();
+    *ret = 0;
+    return true;
+}
+
+static bool b_LogClear(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    il_clear();
+    noc_os_puts("log: cleared\n");
+    *ret = 0;
+    return true;
+}
+
 #endif /* !NOOS_USER */
 
 const noc_builtin noc_builtins[] = {
@@ -1194,6 +1238,10 @@ const noc_builtin noc_builtins[] = {
     { "ClearHist",  NTYPE_VOID, 0, false, b_ClearHist },
     { "PgPred",     NTYPE_VOID, 0, false, b_PgPred },
     { "ModelInfo",  NTYPE_VOID, 0, false, b_ModelInfo },
+    { "LogInfo",    NTYPE_VOID, 0, false, b_LogInfo },
+    { "LogDump",    NTYPE_VOID, 0, false, b_LogDump },
+    { "LogSave",    NTYPE_VOID, 0, false, b_LogSave },
+    { "LogClear",   NTYPE_VOID, 0, false, b_LogClear },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);

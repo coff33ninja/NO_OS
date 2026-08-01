@@ -99,6 +99,16 @@ The kernel append-logs to `/var/interact.log` (pre-allocated circular buffer):
 - Log size: 64 KiB (configurable)
 - Oldest entries overwritten when full
 
+> **Status (slice 4):** implemented — `[TICK]`/`[CMD]`/`[OUT]`/`[ERR]` records
+> in a 64 KiB in-memory ring (`kernel/noc/interact.c`), captured around every
+> REPL command via `noc_os_putc`; `LogInfo`/`LogDump`/`LogClear`/`LogSave`
+> builtins; `LogSave` persists a 4 KiB checkpoint to `interact.log` (flat FS,
+> no `/var/` directory yet) that `il_load()` restores at boot, so the corpus
+> survives reset. Deferred: `[KEY]` keystroke records (needs a kbd capture
+> hook), `[SPAWN]`/`[EXIT]` process-event records, and the fixed-record binary
+> encoding (the current log is line-based text, which doubles as the training
+> corpus).
+
 ### 4.2. Training Process
 - **Trigger**: System idle for >30 seconds AND log has ≥1024 new bytes
 - **Batch**: Contiguous chunk from log (up to 4 KiB)

@@ -88,6 +88,12 @@ _(persists the NOC corpus and the trained model across reboot)_
 - [ ] Self-evolution loop: log interactions -> idle retrain -> model drafts
       NOC code -> runs sandboxed -> output feeds the (versioned,
       rollback-safe) corpus
+  - [x] Persistent interaction log: every REPL command captured as
+        `[TICK]`/`[CMD]`/`[OUT]`/`[ERR]` records in a 64 KiB ring
+        (`LogInfo;`/`LogDump;`/`LogClear;`); `LogSave;` writes a 4 KiB
+        checkpoint to `interact.log` (flat FS, no `/var/` yet) that is
+        restored at boot — the training corpus survives reboot
+  - [ ] Idle retrain loop feeding the micro-transformer from the log
 - [ ] Accept: the model predicts the next command from history; a
       model-drafted NOC program runs and its result shows in the shell
 

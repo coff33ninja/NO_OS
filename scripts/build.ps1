@@ -59,6 +59,7 @@ $csrcs = @(
     'noc\repl.c'
     'noc\exec.c'
     'noc\predict.c'
+    'noc\interact.c'
     'mm\pmm.c'
     'mm\heap.c'
     'mm\vmm.c'
@@ -687,6 +688,51 @@ function Invoke-Test {
             throw 'user process commit over budget was not rejected'
         }
 
+        # ---- M5: interaction log (persistent training corpus) ----
+        # Every REPL command is captured as [CMD] + [OUT]/[ERR] records in a
+        # 64 KiB in-memory ring. LogDump proves the record layout; LogSave
+        # persists a 4 KiB checkpoint (the FS file cap is 5 KiB) so a reboot
+        # restores the corpus. The marker command's records must survive the
+        # reset and show up in a post-boot LogDump.
+        Send-Keys "LogInfo;`n"
+        if (-not (Wait-LogPattern 'log: [0-9]+ records, [0-9]+ bytes of 65536')) {
+            throw 'LogInfo did not report interaction log stats'
+        }
+        Send-Keys "PrintLn(`"IL-PERSIST`");`n"
+        if (-not (Wait-LogPattern 'IL-PERSIST')) {
+            throw 'interaction marker PrintLn output did not appear'
+        }
+        Send-Keys "LogDump;`n"
+        if (-not (Wait-LogPattern '\[CMD\] PrintLn\("IL-PERSIST"\);')) {
+            throw 'LogDump did not include the marker command record'
+        }
+        if (-not (Wait-LogPattern '\[OUT\] IL-PERSIST')) {
+            throw 'LogDump did not include the marker output record'
+        }
+        Send-Keys "LogSave;`n"
+        if (-not (Wait-LogPattern 'log: saved interact\.log \(\d+ bytes\)')) {
+            throw 'LogSave did not persist the interaction log'
+        }
+        $base2 = Get-Log
+        Send-Monitor 'system_reset'
+        if (-not (Wait-Appended $base2 'keyboard echo test' 30)) {
+            throw 'guest did not reboot after second system_reset'
+        }
+        Send-Keys "ok`n`n"
+        if (-not (Wait-Appended $base2 'boot-test-ok')) {
+            throw 'phase-C keyboard echo did not yield boot-test-ok'
+        }
+        if (-not (Wait-Appended $base2 'log: restored')) {
+            throw 'guest did not restore the interaction log at boot'
+        }
+        if (-not (Wait-Appended $base2 'no/os> ')) {
+            throw 'phase-C shell prompt did not appear'
+        }
+        Send-Keys "LogDump;`n"
+        if (-not (Wait-Appended $base2 '\[CMD\] PrintLn\("IL-PERSIST"\);')) {
+            throw 'persisted interaction log did not survive reboot'
+        }
+
         # Deliberate fault as the final check: #UD must trap, not triple-fault.
         Send-Keys "FaultTest`n"
         if (-not (Wait-LogPattern 'EXCEPTION: Invalid Opcode')) {
@@ -695,7 +741,7 @@ function Invoke-Test {
 
         $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
         Write-Host $content
-        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, and fault trapping all verified'
+        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, and fault trapping all verified'
         exit 0
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }

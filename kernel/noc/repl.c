@@ -3,6 +3,7 @@
 #include "string.h"
 #include "printk.h"
 #include "predict.h"
+#include "interact.h"
 
 void noc_repl(void)
 {
@@ -11,7 +12,9 @@ void noc_repl(void)
     for (;;) {
         line_read(line, sizeof(line), "no/os> ");
         cmdhist_add(line);
+        il_begin_capture();
         noc_exec_line(line);
+        il_end_capture(line);
     }
 }
 
