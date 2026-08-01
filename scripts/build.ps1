@@ -61,6 +61,7 @@ $csrcs = @(
     'noc\predict.c'
     'noc\interact.c'
     'noc\train.c'
+    'noc\trans.c'
     'noc\corpus.c'
     'mm\pmm.c'
     'mm\heap.c'
@@ -998,18 +999,34 @@ function Invoke-Test {
         }
 
         $baseR = Get-Log
-        Send-Keys "Spawn(`"Str S = Alloc(2); MemCpy(S, 0x100F1000000, 1); PrintLn(\`"zero=%d\`", Len(S)); MemCpy(S, 0x100F1000000+16705, 1); PrintLn(\`"trained=%d\`", Len(S));`");`n"
+        Send-Keys "TransInfo;`n"
+        if (-not (Wait-Appended $baseR 'trans: model L=\d+ ctx=\d+ d=\d+ ff=\d+ heads=\d+ pages=\d+ weights=\d+ KB')) {
+            throw 'TransInfo did not report the transformer model'
+        }
+        # The model window serves the transformer blob (trans_weights), not
+        # the legacy bigram weights. Its canonical bytes are deterministic
+        # regardless of the PRNG: byte 0 is the header magic ('N'=0x4E), the
+        # final-LN gamma is 1.0 (16, Q4.4) and its bias is 0. The offsets are
+        # config-independent in D/L/F (the final-LN sits at TRANS_HDR+V*D+
+        # L*LAYSA). A spawned process reads those bytes through the demand-
+        # paged mapping: the first access to each page faults it in read-only
+        # (budget-charged) and the read back proves the frame holds the
+        # canonical weight bytes.
+        Send-Keys "Spawn(`"Str S = Alloc(2); MemCpy(S, 0x100F1000000, 1); PrintLn(\`"magic=%d\`", Len(S)); MemCpy(S, 0x100F1000000+411680, 1); PrintLn(\`"gamma=%d\`", Len(S)); MemCpy(S, 0x100F1000000+411744, 1); PrintLn(\`"bias=%d\`", Len(S));`");`n"
         if (-not (Wait-Appended $baseR 'model: fault-in pg=0 resident=1 used=4 KB')) {
             throw 'reading a cold model page did not demand-page it in'
         }
-        if (-not (Wait-Appended $baseR 'model: fault-in pg=4 resident=2 used=8 KB')) {
-            throw 'reading the trained weight page did not demand-page it in'
+        if (-not (Wait-Appended $baseR 'model: fault-in pg=100 resident=2 used=8 KB')) {
+            throw 'reading a deep weight page did not demand-page it in'
         }
-        if (-not (Wait-Appended $baseR 'zero=0')) {
-            throw 'cold weight byte did not read back as zero'
+        if (-not (Wait-Appended $baseR 'magic=1')) {
+            throw 'the transformer header magic did not read back through the window'
         }
-        if (-not (Wait-Appended $baseR 'trained=1')) {
-            throw 'trained weight byte did not read back nonzero through the mapping'
+        if (-not (Wait-Appended $baseR 'gamma=1')) {
+            throw 'the final-LN gamma did not read back as 1.0 (16) through the mapping'
+        }
+        if (-not (Wait-Appended $baseR 'bias=0')) {
+            throw 'the final-LN bias did not read back as zero through the mapping'
         }
 
         # A write to a resident (read-only) model page must fault and kill the

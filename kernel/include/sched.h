@@ -37,8 +37,9 @@ typedef struct {
     u32         model_budget_kb;  /* model weight RAM cap, default 8192 */
     u32         model_weights_kb; /* resident weight pages (KB) */
     u32         model_faults;     /* demand faults serviced, lifetime */
-    u32         model_map;        /* resident model page bitmap (bit N = pg N) */
-    u64         model_frames[USER_MODEL_PAGES]; /* backing frame per page */
+    usize       model_frames_n;   /* allocated length of frames/map (pages) */
+    u64        *model_frames;     /* backing frame per page (lazy, kmalloc) */
+    u32        *model_map;        /* resident page bitmap (lazy, kmalloc) */
     i64         exit_code;
     coro_t      coro;       /* kernel task (task 0) coroutine context */
 } task_t;
@@ -68,5 +69,10 @@ void sched_ps(void);
 /* Idle hook for opportunistic work */
 void sched_register_idle_hook(void (*fn)(void));
 void sched_idle(void);
+
+/* Call `cb` for every live user task (task 0, the kernel REPL, is skipped).
+   Used by model_invalidate_all() to reset per-task model state after the
+   weight blob is rebuilt. */
+void sched_foreach_user(void (*cb)(task_t *t));
 
 #endif

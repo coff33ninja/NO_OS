@@ -1,25 +1,110 @@
 #include "model.h"
 #include "vmm.h"
 #include "pmm.h"
-#include "train.h"
+#include "trans.h"
 #include "string.h"
 #include "printk.h"
+#include "heap.h"
 
 #define MODEL_PG 4096
+#define MODEL_BITMAP_WORDS(n) (((n) + 31) / 32)
+
+/* Kernel-wide model window size in pages. Set by model_window_setup() to the
+   current transformer blob size (trans_weight_pages()); everything below
+   (range checks, syscall page validation, per-task bitmap sizing) derives
+   from it, never from a hardcoded constant. */
+static u32 win_pages = 16; /* fallback before trans_init runs */
+
+u32 model_window_pages(void)
+{
+    return win_pages;
+}
+
+void model_window_setup(void)
+{
+    u32 p = trans_weight_pages();
+    if (p < 1)
+        p = 1;
+    if (p > USER_MODEL_MAX / MODEL_PG)
+        p = (u32)(USER_MODEL_MAX / MODEL_PG);
+    win_pages = p;
+}
 
 bool model_in_range(u64 addr)
 {
-    return addr >= USER_MODEL_BASE && addr < USER_MODEL_END;
+    return addr >= USER_MODEL_BASE &&
+           addr - USER_MODEL_BASE < (u64)win_pages * MODEL_PG;
 }
 
-/* Resident page count derived from the task's bitmap (each is 4 KiB). */
+/* Resident page count derived from the task's bitmap. */
 u32 model_resident_pages(const task_t *t)
 {
     u32 n = 0;
-    for (usize i = 0; i < USER_MODEL_PAGES; i++)
-        if (t->model_map & (1u << i))
-            n++;
+    u32 words = MODEL_BITMAP_WORDS(t->model_frames_n);
+    if (t->model_map)
+        for (u32 i = 0; i < words; i++)
+            for (u32 b = t->model_map[i]; b; b &= b - 1)
+                n++;
     return n;
+}
+
+/* Ensure the task's per-task model arrays cover `pages` model pages.
+   Allocated lazily on the first demand fault; the resident-page budget and
+   page indices live here, and model_exit_task() reclaims them. */
+static bool model_ensure_task(task_t *t, u32 pages)
+{
+    if (t->model_frames_n >= pages && t->model_frames && t->model_map)
+        return true;
+    u32 words = MODEL_BITMAP_WORDS(pages);
+    u64 *frames = kmalloc(sizeof(u64) * pages);
+    u32 *map = kmalloc(sizeof(u32) * words);
+    if (!frames || !map) {
+        if (frames)
+            kfree(frames);
+        if (map)
+            kfree(map);
+        return false;
+    }
+    for (u32 i = 0; i < pages; i++)
+        frames[i] = 0;
+    for (u32 i = 0; i < words; i++)
+        map[i] = 0;
+    if (t->model_frames)
+        kfree(t->model_frames);
+    if (t->model_map)
+        kfree(t->model_map);
+    t->model_frames = frames;
+    t->model_map = map;
+    t->model_frames_n = pages;
+    return true;
+}
+
+void model_exit_task(task_t *t)
+{
+    if (t->model_frames)
+        kfree(t->model_frames);
+    if (t->model_map)
+        kfree(t->model_map);
+    t->model_frames = NULL;
+    t->model_map = NULL;
+    t->model_frames_n = 0;
+}
+
+static bool model_page_resident(const task_t *t, usize pg)
+{
+    if (!t->model_map)
+        return false;
+    return (t->model_map[pg >> 5] >> (pg & 31)) & 1u;
+}
+
+static void model_page_set(task_t *t, usize pg, bool resident)
+{
+    u32 *w = &t->model_map[pg >> 5];
+    u32 bit = 1u << (pg & 31);
+    if (resident)
+        *w |= bit;
+    else
+        *w &= ~bit;
 }
 
 /* Service a user page fault on the model region. Only not-present faults
@@ -34,9 +119,11 @@ bool model_demand_fault(task_t *t, u64 cr2, u64 err)
         return false;
 
     usize pg = (usize)((cr2 - USER_MODEL_BASE) / MODEL_PG);
-    if (pg >= USER_MODEL_PAGES)
+    if (pg >= win_pages)
         return false;
-    if (t->model_map & (1u << pg))
+    if (!model_ensure_task(t, win_pages))
+        return false;
+    if (model_page_resident(t, pg))
         return true; /* already resident: nothing to fault in */
 
     if ((u64)t->model_weights_kb + 4 > (u64)t->model_budget_kb) {
@@ -51,11 +138,11 @@ bool model_demand_fault(task_t *t, u64 cr2, u64 err)
         return false;
     }
 
-    const u8 *weights = train_weights();
+    const u8 *weights = trans_weights();
     memcpy((void *)frame, weights + pg * MODEL_PG, MODEL_PG);
     vmm_map(t->cr3, USER_MODEL_BASE + pg * MODEL_PG, frame, VMM_USER);
     t->model_frames[pg] = frame;
-    t->model_map |= (1u << pg);
+    model_page_set(t, pg, true);
     t->model_weights_kb += 4;
     t->model_faults++;
     printk("model: fault-in pg=%u resident=%u used=%u KB\n", (unsigned)pg,
@@ -68,9 +155,9 @@ bool model_demand_fault(task_t *t, u64 cr2, u64 err)
    Returns false when the page was not resident (nothing to do). */
 bool model_evict_page(task_t *t, usize pg)
 {
-    if (pg >= USER_MODEL_PAGES)
+    if (pg >= win_pages)
         return false;
-    if (!(t->model_map & (1u << pg)))
+    if (!t->model_map || !model_page_resident(t, pg))
         return false;
 
     u64 va = USER_MODEL_BASE + pg * MODEL_PG;
@@ -78,9 +165,37 @@ bool model_evict_page(task_t *t, usize pg)
     __asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
     pmm_free_frame(t->model_frames[pg]);
     t->model_frames[pg] = 0;
-    t->model_map &= ~(1u << pg);
+    model_page_set(t, pg, false);
     t->model_weights_kb -= 4;
     printk("model: evict pg=%u resident=%u used=%u KB\n", (unsigned)pg,
            (unsigned)model_resident_pages(t), (unsigned)t->model_weights_kb);
     return true;
+}
+
+/* Per-task half of model_invalidate_all: drop every resident model page of
+   one task. Iterates the full array length (model_frames_n, the window size
+   the arrays were sized for), so pages that fall outside a *shrunk* window
+   are still unmapped and refunded rather than silently stranded. */
+static void model_invalidate_task(task_t *t)
+{
+    if (!t->model_frames || !t->model_map)
+        return;
+    for (usize pg = 0; pg < t->model_frames_n; pg++) {
+        if (!model_page_resident(t, pg))
+            continue;
+        u64 va = USER_MODEL_BASE + pg * MODEL_PG;
+        vmm_unmap(t->cr3, va);
+        __asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
+        pmm_free_frame(t->model_frames[pg]);
+        t->model_frames[pg] = 0;
+        model_page_set(t, pg, false);
+        t->model_weights_kb -= 4;
+    }
+    printk("model: invalidate pid=%u resident=0 used=%u KB\n",
+           (unsigned)t->pid, (unsigned)t->model_weights_kb);
+}
+
+void model_invalidate_all(void)
+{
+    sched_foreach_user(model_invalidate_task);
 }

@@ -90,8 +90,18 @@ _(persists the NOC corpus and the trained model across reboot)_
          present+write fault (or an over-budget request) is refused — the
          former kills the writer, the latter denies the page. Harness-verified
          incl. evict-then-refault under a 4 KB budget.
-- [ ] Byte-level micro-transformer (~1-10M params, 8-bit) trained on the NOC
-      command history; runs as a sandboxed user-mode process
+- [x] Byte-level micro-transformer (~1-10M params, 8-bit) wired behind the
+      demand-paged model window (`kernel/noc/trans.c`): int8 Q8.8 fixed-point
+      attention/GELU/LayerNorm, config autotuned up / degraded down to boot
+      RAM (`TransInfo`/`TransConfig`/`TransMem`), greedy `TransPredict`
+      generation, and the window now serves `trans_weights()` — a spawned
+      process reads the header magic and final-LN gamma/bias back through the
+      mapping, writes are refused, and budget pressure evicts/refaults pages
+      (harness-verified); `model_invalidate_all` drops every task's frames on
+      reconfiguration
+  - [ ] Numerically validate the forward pass on a controlled corpus
+  - [ ] SGD backprop training (`trans_train`/`trans_eval`) with batch
+        accumulation and fixed-point loss, then retrain from the log
 - [ ] Self-evolution loop: log interactions -> idle retrain -> model drafts
       NOC code -> runs sandboxed -> output feeds the (versioned,
       rollback-safe) corpus
@@ -127,8 +137,8 @@ _(persists the NOC corpus and the trained model across reboot)_
         `PrintLn("DRAFT-OK");` x5: seed `PrintLn("DRAFT-OK"` (balanced
         string, closing quote in the seed) completes deterministically to
         `PrintLn("DRAFT-OK");`, spawns, and the bare `DRAFT-OK` reaches the
-        shell. (Real transformer and held-out evaluation deferred to later
-        M5 work.)
+        shell. (SGD training and held-out evaluation are the next M5 slice;
+        the transformer's demand-paged window is harness-verified above.)
   - [x] Versioned, rollback-safe corpus: `DraftRun` writes accepted drafts to
         `corpNNNN.noc` with a `@@ GENERATED:` metadata header and advances
         the version (`CorpusInfo;`); a rejected (syntax-failing) draft leaves

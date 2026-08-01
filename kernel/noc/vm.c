@@ -12,6 +12,7 @@
 #include "pgpred.h"
 #include "interact.h"
 #include "train.h"
+#include "trans.h"
 #include "corpus.h"
 #endif
 
@@ -753,7 +754,8 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
                 "StatFile, FormatDisk, Run, Predict, Hist, ClearHist, PgPred, "
                 "ModelInfo, LogInfo, LogDump, LogSave, LogClear, "
                 "Train, TrainIdle, TrainReset, PredictBigram, DraftRun, "
-                "CorpusInfo, CorpusRollback\n");
+                "CorpusInfo, CorpusRollback, "
+                "TransInfo, TransMem, TransConfig, TransPredict\n");
     *ret = 0;
     return true;
 }
@@ -1365,6 +1367,69 @@ static bool b_LogClear(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+/* ---- M5 micro-transformer introspection / reconfigure ---- */
+
+static bool b_TransInfo(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    char buf[192];
+    trans_info(buf, sizeof(buf));
+    noc_os_puts(buf);
+    *ret = 0;
+    return true;
+}
+
+static bool b_TransMem(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    u32 kb = 0;
+    if (n >= 1)
+        kb = (u32)args[0];
+    char buf[96];
+    sprintk(buf, sizeof(buf), "trans: act cap = %u KB\n",
+            (unsigned)trans_set_act_cap(kb));
+    noc_os_puts(buf);
+    *ret = 0;
+    return true;
+}
+
+static bool b_TransConfig(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 2)
+        return false;
+    trans_config((u32)args[0], (u32)args[1]);
+    *ret = 0;
+    return true;
+}
+
+static bool b_TransPredict(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    const char *seed = (const char *)args[0];
+    usize sl = 0;
+    while (seed[sl])
+        sl++;
+    char out[128];
+    usize cont = trans_generate(out, sizeof(out), seed, sl);
+    char buf[160];
+    sprintk(buf, sizeof(buf), "trans: pred %u bytes: ", (unsigned)cont);
+    noc_os_puts(buf);
+    for (usize i = 0; i < cont; i++) {
+        char c = out[i];
+        if (c == '\n' || c == '\r' || c < 0x20 || c > 0x7e)
+            c = '.';
+        noc_os_putc(c);
+    }
+    noc_os_putc('\n');
+    *ret = (u64)cont;
+    return true;
+}
+
 #endif /* !NOOS_USER */
 
 const noc_builtin noc_builtins[] = {
@@ -1418,6 +1483,10 @@ const noc_builtin noc_builtins[] = {
     { "DraftRun",   NTYPE_I64,  1, false, b_DraftRun },
     { "CorpusInfo",   NTYPE_VOID, 0, false, b_CorpusInfo },
     { "CorpusRollback", NTYPE_VOID, 0, false, b_CorpusRollback },
+    { "TransInfo",    NTYPE_VOID, 0, false, b_TransInfo },
+    { "TransMem",     NTYPE_VOID, 1, false, b_TransMem },
+    { "TransConfig",  NTYPE_VOID, 2, false, b_TransConfig },
+    { "TransPredict", NTYPE_I64,  1, false, b_TransPredict },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);

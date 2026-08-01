@@ -8,6 +8,7 @@
 #include "pit.h"
 #include "pmm.h"
 #include "interact.h"
+#include "model.h"
 
 extern int coro_save(coro_t *out);
 extern void coro_restore(coro_t *in);
@@ -123,6 +124,7 @@ void sched_exit_user(struct regs *r, i64 code)
     il_event_exit(current->pid, code);
     printk("process %u (%s) exited: %d\n",
            (unsigned)current->pid, current->name, (int)code);
+    model_exit_task(current);
     if (current->cr3)
         vmm_free_address_space(current->cr3);
     current->cr3 = 0;
@@ -288,6 +290,15 @@ void sched_ps(void)
 void sched_register_idle_hook(void (*fn)(void))
 {
     sched_idle_hook = fn;
+}
+
+void sched_foreach_user(void (*cb)(task_t *t))
+{
+    for (u32 i = 0; i < TASK_MAX; i++) {
+        task_t *t = &tasks[i];
+        if (t->kstack && t->user)
+            cb(t);
+    }
 }
 
 void sched_idle(void)

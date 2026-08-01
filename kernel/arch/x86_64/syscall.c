@@ -117,7 +117,7 @@ void syscall_dispatch(struct regs *r)
     }
     case SYS_MODEL_TOUCH: {
         usize pg = (usize)a1;
-        if (pg >= USER_MODEL_PAGES) {
+        if (pg >= model_window_pages()) {
             r->rax = (u64)-1;
             break;
         }

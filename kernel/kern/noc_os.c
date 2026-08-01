@@ -91,7 +91,7 @@ u64 noc_os_model_touch(u64 page)
     task_t *t = sched_current();
     if (!t->user || !t->cr3)
         return 0; /* only ring-3 tasks have a model window */
-    if (page >= USER_MODEL_PAGES)
+    if (page >= model_window_pages())
         return (u64)-1;
     return model_demand_fault(t, USER_MODEL_BASE + page * 4096, 0)
                ? 0 : (u64)-1;

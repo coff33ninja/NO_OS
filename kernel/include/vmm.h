@@ -15,13 +15,16 @@
 #define USER_HEAP_BASE    0x00000100D0000000UL
 #define USER_STACK_BASE   0x00000100F0000000UL
 #define USER_STACK_TOP    (USER_STACK_BASE + 0x10000UL) /* 64 KiB region */
-/* Demand-paged read-only model weights: 64 KiB (16 pages) just above the
-   user stack. Not mapped at spawn; each page is faulted in read-only on
-   first access, charged against the task's model RAM budget, and evicted
-   explicitly (the canonical weight copy makes re-faulting always safe). */
+/* Demand-paged read-only model weights. The window is NOT fixed-size: the
+   resident size is model_window_pages() (kernel global in model.c), derived
+   from the RAM-driven transformer weight blob at trans_init so the same
+   binary serves a 256 KiB model on the 64 MiB test image and a multi-GiB
+   model on big hardware. Pages are not mapped at spawn; each is faulted in
+   read-only on first access, charged against the task's model RAM budget,
+   and evicted explicitly (the canonical weight copy makes re-faulting
+   always safe). */
 #define USER_MODEL_BASE   0x00000100F1000000UL
-#define USER_MODEL_END   (USER_MODEL_BASE + 0x10000UL)
-#define USER_MODEL_PAGES  16
+#define USER_MODEL_MAX    (1UL << 30) /* 1 GiB virtual cap for the window */
 #define USER_REGION_END   0x0000010100000000UL
 
 u64  vmm_kernel_cr3(void);
