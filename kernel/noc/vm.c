@@ -18,10 +18,27 @@
 noc_fn *noc_funcs[NOC_MAX_FUNCS];
 usize   noc_nfuncs;
 
+static bool noc_name_eq(const char *a, const char *b)
+{
+    while (*a && *b) {
+        char ca = *a;
+        char cb = *b;
+        if (ca >= 'A' && ca <= 'Z')
+            ca = (char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z')
+            cb = (char)(cb - 'A' + 'a');
+        if (ca != cb)
+            return false;
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
 noc_fn *noc_lookup(const char *name)
 {
     for (usize i = 0; i < noc_nfuncs; i++) {
-        if (strcmp(noc_funcs[i]->name, name) == 0)
+        if (noc_name_eq(noc_funcs[i]->name, name))
             return noc_funcs[i];
     }
     return NULL;

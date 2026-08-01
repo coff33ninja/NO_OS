@@ -18,6 +18,8 @@ void noc_selftest(void)
 {
     printk("noc self-test\n");
     noc_exec_line("PrintLn(\"NOC hello\"); 40+2;");
+    noc_exec_line("MemInfo;");
+    noc_exec_line("help;");
     noc_exec_line("I64 Mul2(I64 x, I64 y=2) { return x*y; }");
     noc_exec_line("PrintLn(\"%d\", Mul2(21));");
     noc_exec_line("PrintLn(\"%d\", Mul2(6));");
