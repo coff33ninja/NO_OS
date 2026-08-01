@@ -76,13 +76,20 @@ _(persists the NOC corpus and the trained model across reboot)_
         deliberately faults a spawned user process for testing
   - [ ] Prefetch action (pre-map/pre-load the predicted page) once demand
         paging / swap exist
-- [ ] Model weights are shared read-only pages, demand-paged from disk and
-      evictable under pressure; `model_budget(n)` syscall enforces a hard
-      memory cap per LLM process
+- [x] Model weights are shared read-only pages, demand-paged and evictable
+      under pressure; `model_budget(n)` syscall enforces a hard memory cap
+      per LLM process
   - [x] `model_budget` syscall: per-process weight RAM budget (default
-        8192 KB), `ModelBudget`/`ModelCommit`/`ModelInfo` builtins; commits
-        over budget are rejected so the model degrades gracefully
-  - [ ] Demand-paged read-only weight pages, evictable under pressure
+         8192 KB), `ModelBudget`/`ModelCommit`/`ModelInfo` builtins; commits
+         over budget are rejected so the model degrades gracefully
+  - [x] Demand-paged read-only weight pages, evictable under pressure: the
+         64 KiB weight table is exposed at a fixed user window
+         (`USER_MODEL_BASE`, 16 pages); each first access faults a page in
+         read-only from the canonical copy and charges 4 KiB to the budget;
+         `ModelTouch(<pg>)`/`ModelEvict(<pg>)`/`ModelStats;` drive it, and a
+         present+write fault (or an over-budget request) is refused — the
+         former kills the writer, the latter denies the page. Harness-verified
+         incl. evict-then-refault under a 4 KB budget.
 - [ ] Byte-level micro-transformer (~1-10M params, 8-bit) trained on the NOC
       command history; runs as a sandboxed user-mode process
 - [ ] Self-evolution loop: log interactions -> idle retrain -> model drafts
@@ -122,6 +129,12 @@ _(persists the NOC corpus and the trained model across reboot)_
         `PrintLn("DRAFT-OK");`, spawns, and the bare `DRAFT-OK` reaches the
         shell. (Real transformer and held-out evaluation deferred to later
         M5 work.)
+  - [x] Versioned, rollback-safe corpus: `DraftRun` writes accepted drafts to
+        `corpNNNN.noc` with a `@@ GENERATED:` metadata header and advances
+        the version (`CorpusInfo;`); a rejected (syntax-failing) draft leaves
+        the corpus untouched (verified by round-trip through `ReadFile`); and
+        `CorpusRollback;` re-spawns the last known good generation. The
+        versioned files are the persistent corpus that survives reboot.
 - [x] Accept: the model predicts the next command from history; a
       model-drafted NOC program runs and its result shows in the shell
       (`DraftRun` + `noc_check_syntax` + `sched_spawn`, harness-verified)

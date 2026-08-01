@@ -61,9 +61,11 @@ $csrcs = @(
     'noc\predict.c'
     'noc\interact.c'
     'noc\train.c'
+    'noc\corpus.c'
     'mm\pmm.c'
     'mm\heap.c'
     'mm\vmm.c'
+    'mm\model.c'
     'mm\pgpred.c'
     'fs\noosfs.c'
     'arch\x86_64\gdt.c'
@@ -880,6 +882,167 @@ function Invoke-Test {
         }
         if (-not (Wait-Appended $baseN '(?m)DRAFT-OK$')) {
             throw 'the spawned draft output did not reach the shell'
+        }
+
+        # Slice 9: versioned, rollback-safe generation corpus. Every
+        # successful DraftRun commits the generated source to a versioned
+        # corpus file (corp%04u.noc) with a metadata header, advances the
+        # persisted corpus.seq counter, and refreshes last_known_good.noc.
+        # A rejected draft writes nothing (failed experiments cannot corrupt
+        # the corpus); CorpusRollback re-runs the last known good generation.
+        # The slice-8 DraftRun already committed corp0001.noc, so this block
+        # works relative to whatever seq is current.
+        $baseK = Get-Log
+        Send-Keys "CorpusInfo;`n"
+        if (-not (Wait-Appended $baseK 'corpus: versions=\d+ next=(\d+) lkg=\w+')) {
+            throw 'CorpusInfo did not report the generation corpus state'
+        }
+        $ci = (Get-Log).Substring($baseK.Length)
+        $mCi = [regex]::Match($ci, 'next=(\d+)')
+        if (-not $mCi.Success) { throw 'could not read the current corpus seq' }
+        $seqNext = [int]$mCi.Groups[1].Value
+        $corpFile = 'corp{0:d4}.noc' -f $seqNext
+
+        # Fresh controlled corpus, then a successful draft of PrintLn("CORP-OK");.
+        $baseR = Get-Log
+        Send-Keys "TrainReset;`n"
+        if (-not (Wait-Appended $baseR 'model: reset')) {
+            throw 'TrainReset did not reset the model'
+        }
+        Send-Keys "LogClear;`n"
+        if (-not (Wait-Appended $baseR 'log: cleared')) {
+            throw 'LogClear did not clear the interaction log'
+        }
+        $baseC = Get-Log
+        foreach ($i in 1..5) {
+            Send-Keys "PrintLn(`"CORP-OK`");`n"
+            if (-not (Wait-Appended $baseC 'CORP-OK')) {
+                throw "corpus slice: CORP-OK #$i did not echo"
+            }
+            $baseC = Get-Log
+        }
+        $baseT2 = Get-Log
+        Send-Keys "Train;`n"
+        if (-not (Wait-Appended $baseT2 'train: ok \(\d+ passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)')) {
+            throw 'Train did not run on the corpus slice'
+        }
+        $baseN = Get-Log
+        Send-Keys "DraftRun(`"PrintLn(`\`"CORP-OK`\`"`");`n"
+        if (-not (Wait-Appended $baseN 'draft: PrintLn\("CORP-OK"\);')) {
+            throw 'corpus DraftRun did not print the completed draft'
+        }
+        if (-not (Wait-Appended $baseN "corpus: saved $corpFile \(seq $seqNext\)")) {
+            throw 'corpus DraftRun did not commit the versioned corpus file'
+        }
+        if (-not (Wait-Appended $baseN 'draft: spawned pid \d+')) {
+            throw 'corpus DraftRun did not spawn the draft'
+        }
+        if (-not (Wait-Appended $baseN '(?m)CORP-OK$')) {
+            throw 'corpus DraftRun output did not reach the shell'
+        }
+
+        # Versioning advanced: next seq bumped, the saved version is now the
+        # last known good.
+        $baseK = Get-Log
+        Send-Keys "CorpusInfo;`n"
+        if (-not (Wait-Appended $baseK "corpus: versions=$seqNext next=$($seqNext + 1) lkg=yes")) {
+            throw 'CorpusInfo did not advance after the committed draft'
+        }
+
+        # A rejected draft must not touch the corpus (rollback-safe).
+        $baseR = Get-Log
+        Send-Keys "DraftRun(`"zzz`");`n"
+        if (-not (Wait-Appended $baseR 'draft: rejected')) {
+            throw 'corpus DraftRun did not reject the zzz draft'
+        }
+        $baseK = Get-Log
+        Send-Keys "CorpusInfo;`n"
+        if (-not (Wait-Appended $baseK "corpus: versions=$seqNext next=$($seqNext + 1) lkg=yes")) {
+            throw 'a rejected draft changed the corpus (rollback-safety violated)'
+        }
+
+        # The versioned file holds the metadata header plus the draft source.
+        $baseF = Get-Log
+        Send-Keys "PrintLn(`"%s`", ReadFile(`"$corpFile`"));`n"
+        if (-not (Wait-Appended $baseF '@@ GENERATED:')) {
+            throw 'corpus file did not carry the GENERATED metadata header'
+        }
+        if (-not (Wait-Appended $baseF 'PrintLn\("CORP-OK"\);')) {
+            throw 'corpus file did not carry the draft source'
+        }
+
+        # Rollback re-runs the last known good generation.
+        $baseB = Get-Log
+        Send-Keys "CorpusRollback;`n"
+        if (-not (Wait-Appended $baseB 'corpus: rollback spawned pid \d+')) {
+            throw 'CorpusRollback did not re-spawn the last known good generation'
+        }
+        if (-not (Wait-Appended $baseB '(?m)CORP-OK$')) {
+            throw 'the rolled-back generation output did not reach the shell'
+        }
+
+        # ---- M5: demand-paged read-only weight pages (evictable) ----
+        # Reset the model and train on a tiny "AAAA" corpus so the A->A
+        # bigram weight (offset 0x4141) is deterministically nonzero while
+        # other weights (e.g. byte 0) stay zero. A spawned process then reads
+        # those bytes through the demand-paged mapping: the first access to
+        # each page faults it in read-only (budget-charged), and Len() on the
+        # copied byte proves the page holds the canonical weight bytes.
+        Send-Keys "TrainReset;`n"
+        Send-Keys "PrintLn(`"AAAA`");`n"
+        Send-Keys "PrintLn(`"AAAA`");`n"
+        Send-Keys "PrintLn(`"AAAA`");`n"
+        Send-Keys "Train;`n"
+        if (-not (Wait-LogPattern 'train: ok \(\d+ passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)')) {
+            throw 'slice-10 corpus training did not run'
+        }
+
+        $baseR = Get-Log
+        Send-Keys "Spawn(`"Str S = Alloc(2); MemCpy(S, 0x100F1000000, 1); PrintLn(\`"zero=%d\`", Len(S)); MemCpy(S, 0x100F1000000+16705, 1); PrintLn(\`"trained=%d\`", Len(S));`");`n"
+        if (-not (Wait-Appended $baseR 'model: fault-in pg=0 resident=1 used=4 KB')) {
+            throw 'reading a cold model page did not demand-page it in'
+        }
+        if (-not (Wait-Appended $baseR 'model: fault-in pg=4 resident=2 used=8 KB')) {
+            throw 'reading the trained weight page did not demand-page it in'
+        }
+        if (-not (Wait-Appended $baseR 'zero=0')) {
+            throw 'cold weight byte did not read back as zero'
+        }
+        if (-not (Wait-Appended $baseR 'trained=1')) {
+            throw 'trained weight byte did not read back nonzero through the mapping'
+        }
+
+        # A write to a resident (read-only) model page must fault and kill the
+        # process: the fault is present+write so it is NOT a demand-page
+        # request and is refused.
+        $baseW = Get-Log
+        Send-Keys "Spawn(`"MemCpy(Alloc(1), 0x100F1000000, 1); MemSet(0x100F1000000, 0x41, 1);`");`n"
+        if (-not (Wait-Appended $baseW 'killed: Page Fault')) {
+            throw 'write to a read-only weight page was not trapped'
+        }
+        if (-not (Wait-Appended $baseW 'cr2=0x100f1000000')) {
+            throw 'write-kill did not report the model address'
+        }
+
+        # Budget pressure + eviction + refault: with a tiny budget the second
+        # page cannot fault in until an earlier page is evicted. Eviction
+        # refunds the budget; a later touch re-faults the page in again.
+        $baseE = Get-Log
+        Send-Keys "Spawn(`"ModelBudget(4); ModelTouch(0); ModelTouch(1); ModelEvict(0); ModelTouch(1); PrintLn(\`"PRESSURE-OK\`");`");`n"
+        if (-not (Wait-Appended $baseE 'model: fault-in pg=0 resident=1 used=4 KB')) {
+            throw 'budgeted touch 0 did not fault in'
+        }
+        if (-not (Wait-Appended $baseE 'model: pg 1 denied \(budget 4 KB\)')) {
+            throw 'budget did not deny the second page under pressure'
+        }
+        if (-not (Wait-Appended $baseE 'model: evict pg=0 resident=0 used=0 KB')) {
+            throw 'ModelEvict did not evict and refund the budget'
+        }
+        if (-not (Wait-Appended $baseE 'model: fault-in pg=1 resident=1 used=4 KB')) {
+            throw 'eviction did not free budget for the needed page'
+        }
+        if (-not (Wait-Appended $baseE 'PRESSURE-OK')) {
+            throw 'evict-under-pressure process did not complete'
         }
 
         # Deliberate fault as the final check: #UD must trap, not triple-fault.

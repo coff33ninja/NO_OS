@@ -15,6 +15,13 @@
 #define USER_HEAP_BASE    0x00000100D0000000UL
 #define USER_STACK_BASE   0x00000100F0000000UL
 #define USER_STACK_TOP    (USER_STACK_BASE + 0x10000UL) /* 64 KiB region */
+/* Demand-paged read-only model weights: 64 KiB (16 pages) just above the
+   user stack. Not mapped at spawn; each page is faulted in read-only on
+   first access, charged against the task's model RAM budget, and evicted
+   explicitly (the canonical weight copy makes re-faulting always safe). */
+#define USER_MODEL_BASE   0x00000100F1000000UL
+#define USER_MODEL_END   (USER_MODEL_BASE + 0x10000UL)
+#define USER_MODEL_PAGES  16
 #define USER_REGION_END   0x0000010100000000UL
 
 u64  vmm_kernel_cr3(void);

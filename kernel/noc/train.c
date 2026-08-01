@@ -201,3 +201,8 @@ usize train_generate(char *out, usize cap, const char *seed, usize seedlen)
     }
     return o;
 }
+
+const u8 *train_weights(void)
+{
+    return w;
+}

@@ -5,6 +5,7 @@
 #include "vmm.h"
 #include "pmm.h"
 #include "noc_os.h"
+#include "model.h"
 #include "string.h"
 #include "printk.h"
 
@@ -112,6 +113,28 @@ void syscall_dispatch(struct regs *r)
             t->model_weights_kb += (u32)need;
             r->rax = 0;
         }
+        break;
+    }
+    case SYS_MODEL_TOUCH: {
+        usize pg = (usize)a1;
+        if (pg >= USER_MODEL_PAGES) {
+            r->rax = (u64)-1;
+            break;
+        }
+        r->rax = model_demand_fault(t, USER_MODEL_BASE + pg * 4096, 0)
+                     ? 0 : (u64)-1;
+        break;
+    }
+    case SYS_MODEL_EVICT:
+        r->rax = model_evict_page(t, (usize)a1) ? 0 : (u64)-1;
+        break;
+    case SYS_MODEL_STATS: {
+        printk("model: faults=%u resident=%u used=%u KB budget=%u KB\n",
+               (unsigned)t->model_faults,
+               (unsigned)model_resident_pages(t),
+               (unsigned)t->model_weights_kb,
+               (unsigned)t->model_budget_kb);
+        r->rax = 0;
         break;
     }
     default:

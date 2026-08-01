@@ -16,6 +16,9 @@
 #define SYS_KBD_PEEK 10
 #define SYS_MODEL_BUDGET 11
 #define SYS_MODEL_COMMIT 12
+#define SYS_MODEL_TOUCH  13
+#define SYS_MODEL_EVICT  14
+#define SYS_MODEL_STATS  15
 
 void syscall_dispatch(struct regs *r);
 

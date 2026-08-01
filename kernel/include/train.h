@@ -25,4 +25,9 @@ void train_reset(void);
    seed (ties -> lowest byte value). Writes the continuation only. */
 usize train_generate(char *out, usize cap, const char *seed, usize seedlen);
 
+/* Pointer to the canonical 64 KiB weight array (w[prev<<8|next]). This is
+   the only source of truth for the demand-paged model window: fault-in
+   copies from it, so evicted pages can always be reconstructed. */
+const u8 *train_weights(void);
+
 #endif

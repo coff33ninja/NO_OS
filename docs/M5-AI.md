@@ -169,6 +169,37 @@ The kernel append-logs to `/var/interact.log` (pre-allocated circular buffer):
 > where the `[TICK]` records' `K`->`]` and the `[OUT]` records' `K`->`\n`
 > would both out-vote the close-quote `K`->`"`.
 
+> **Status (slice 9):** the corpus is now versioned and rollback-safe
+> (`kernel/noc/corpus.c`). `DraftRun` persists each accepted draft to
+> `corpNNNN.noc` (incrementing `NNNN`) with a `@@ GENERATED:` metadata
+> header so the versioned file is the durable corpus (survives reboot), and
+> `CorpusInfo;` reports the current version / next version / last-known-good
+> state. A draft that fails `noc_check_syntax` is rejected *without* touching
+> the corpus — `CorpusInfo` does not advance, verified by round-tripping the
+> last versioned file through `ReadFile`. `CorpusRollback;` re-spawns the
+> last known good generation (`corpus: rollback spawned pid N`) and its
+> output reaches the shell, so a bad commit can be unwound without losing
+> earlier work.
+
+> **Status (slice 10):** the trained weights are exposed as demand-paged,
+> read-only user pages instead of a bulk-resident blob. The 64 KiB table
+> lives at a fixed window (`USER_MODEL_BASE` = `0x100F1000000`, 16 pages,
+> `kernel/include/vmm.h`); a user-mode first access traps to
+> `model_demand_fault` (`kernel/mm/model.c`), which copies the 4 KiB page
+> from the canonical weights in `train.c` (`train_weights()`), maps it
+> read-only via `vmm_map(..., VMM_USER)` (no `VMM_WRITE`), and charges the
+> frame to the task's `model_budget`. `ModelTouch(<pg>)`/`ModelEvict(<pg>)`/
+> `ModelStats;` (syscalls 13-15) drive the window explicitly. A write to a
+> resident page faults (present+write) and is refused — the offending
+> process is killed (`process N killed: Page Fault`, `cr2=...`); a fault
+> that would exceed the budget is denied (`model: pg N denied (budget M KB)`)
+> rather than exceeding the cap, and `ModelEvict` un-maps + frees + refunds
+> so the page can be faulted back in. Harness-verified end to end: cold page
+> reads back `zero=0`, the trained `A->A` weight (offset `0x4141`, pg 4)
+> reads back nonzero, a write to the window kills the process, and
+> `ModelBudget(4); ModelTouch(0); ModelTouch(1); ModelEvict(0); ModelTouch(1);`
+> exercises deny -> evict -> refault in one run.
+
 ### 4.3. Model Updates
 - New weights written to temporary file
 - On successful validation: atomic swap with current model file

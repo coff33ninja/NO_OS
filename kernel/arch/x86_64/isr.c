@@ -4,6 +4,7 @@
 #include "syscall.h"
 #include "gdt.h"
 #include "pgpred.h"
+#include "model.h"
 
 #define EXC_COUNT 32
 
@@ -58,14 +59,24 @@ void isr_dispatch(u64 vector, u64 error, struct regs *r)
     if (vector < EXC_COUNT) {
         if ((r->cs & ~3) == GDT_UCODE) {
             task_t *t = sched_current();
-            printk("process %u (%s) killed: %s (rip=0x%llx err=0x%llx)\n",
-                   (unsigned)t->pid, t->name, exc_names[vector], r->rip, error);
             if (vector == 14) { /* page fault */
                 u64 cr2;
                 __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+                if (model_demand_fault(t, cr2, error)) {
+                    /* Demand-paged a read-only model weight page in; retry
+                       the faulting instruction with the page now mapped. */
+                    return;
+                }
+                printk("process %u (%s) killed: %s (rip=0x%llx err=0x%llx)\n",
+                       (unsigned)t->pid, t->name, exc_names[vector],
+                       r->rip, error);
                 pgpred_fault(cr2);
                 printk("  cr2=0x%llx\n", cr2);
+                sched_exit_user(r, -1);
+                return;
             }
+            printk("process %u (%s) killed: %s (rip=0x%llx err=0x%llx)\n",
+                   (unsigned)t->pid, t->name, exc_names[vector], r->rip, error);
             sched_exit_user(r, -1);
             return;
         }

@@ -23,4 +23,11 @@ void  noc_os_exit(int code);
 u64   noc_os_model_budget(u64 kb);
 u64   noc_os_model_commit(u64 pages);
 
+/* M5: demand-paged read-only weight pages. touch faults a page in (charging
+   the budget), evict frees a resident page (refunding it); stats prints the
+   per-task accounting. Operating on the calling task. */
+u64   noc_os_model_touch(u64 page);
+u64   noc_os_model_evict(u64 page);
+u64   noc_os_model_stats(void);
+
 #endif

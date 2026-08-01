@@ -12,6 +12,7 @@
 #include "pgpred.h"
 #include "interact.h"
 #include "train.h"
+#include "corpus.h"
 #endif
 
 #define NOC_STACK_SIZE 4096
@@ -712,6 +713,33 @@ static bool b_ModelCommit(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_ModelTouch(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    *ret = noc_os_model_touch(args[0]);
+    return true;
+}
+
+static bool b_ModelEvict(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    *ret = noc_os_model_evict(args[0]);
+    return true;
+}
+
+static bool b_ModelStats(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    *ret = noc_os_model_stats();
+    return true;
+}
+
 static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
 {
     (void)vm;
@@ -720,10 +748,12 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
     noc_os_puts("commands: Help, Version, MemInfo, Echo, FaultTest, Reboot, "
                 "Print, PrintLn, Sleep, Time, KeyGet, KeyPressed, Alloc, Free, "
                 "MemSet, MemCpy, Len, PageFault, ModelBudget, ModelCommit, "
+                "ModelTouch, ModelEvict, ModelStats, "
                 "Spawn, Ps, Demo, SaveFile, ReadFile, DeleteFile, ListDir, "
                 "StatFile, FormatDisk, Run, Predict, Hist, ClearHist, PgPred, "
                 "ModelInfo, LogInfo, LogDump, LogSave, LogClear, "
-                "Train, TrainIdle, TrainReset, PredictBigram, DraftRun\n");
+                "Train, TrainIdle, TrainReset, PredictBigram, DraftRun, "
+                "CorpusInfo, CorpusRollback\n");
     *ret = 0;
     return true;
 }
@@ -1266,7 +1296,29 @@ static bool b_DraftRun(void *vm, u64 *args, usize n, u64 *ret)
     char buf[48];
     sprintk(buf, sizeof(buf), "draft: spawned pid %d\n", (int)pid);
     noc_os_puts(buf);
+    if (pid >= 0)
+        corpus_commit(prog, seed);
     *ret = (u64)pid;
+    return true;
+}
+
+static bool b_CorpusInfo(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    corpus_info();
+    *ret = 0;
+    return true;
+}
+
+static bool b_CorpusRollback(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    corpus_rollback();
+    *ret = 0;
     return true;
 }
 
@@ -1330,6 +1382,9 @@ const noc_builtin noc_builtins[] = {
     { "PageFault",  NTYPE_I64,  1, false, b_PageFault },
     { "ModelBudget", NTYPE_I64, 1, false, b_ModelBudget },
     { "ModelCommit", NTYPE_I64, 1, false, b_ModelCommit },
+    { "ModelTouch",  NTYPE_I64, 1, false, b_ModelTouch },
+    { "ModelEvict",  NTYPE_I64, 1, false, b_ModelEvict },
+    { "ModelStats",  NTYPE_I64, 0, false, b_ModelStats },
     { "Help",       NTYPE_VOID, 0, false, b_Help },
 #ifndef NOOS_USER
     { "Echo",       NTYPE_VOID, 1, false, b_Echo },
@@ -1361,6 +1416,8 @@ const noc_builtin noc_builtins[] = {
     { "TrainReset", NTYPE_VOID, 0, false, b_TrainReset },
     { "PredictBigram", NTYPE_VOID, 1, false, b_PredictBigram },
     { "DraftRun",   NTYPE_I64,  1, false, b_DraftRun },
+    { "CorpusInfo",   NTYPE_VOID, 0, false, b_CorpusInfo },
+    { "CorpusRollback", NTYPE_VOID, 0, false, b_CorpusRollback },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);

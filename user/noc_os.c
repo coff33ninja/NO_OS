@@ -13,6 +13,9 @@
 #define SYS_KBD_PEEK 10
 #define SYS_MODEL_BUDGET 11
 #define SYS_MODEL_COMMIT 12
+#define SYS_MODEL_TOUCH  13
+#define SYS_MODEL_EVICT  14
+#define SYS_MODEL_STATS  15
 
 /* int 0x80 preserves every GPR except rax (the return value). Arg 1 in rdi. */
 static u64 do_sys(u64 num, u64 arg)
@@ -85,4 +88,19 @@ u64 noc_os_model_budget(u64 kb)
 u64 noc_os_model_commit(u64 pages)
 {
     return do_sys(SYS_MODEL_COMMIT, pages);
+}
+
+u64 noc_os_model_touch(u64 page)
+{
+    return do_sys(SYS_MODEL_TOUCH, page);
+}
+
+u64 noc_os_model_evict(u64 page)
+{
+    return do_sys(SYS_MODEL_EVICT, page);
+}
+
+u64 noc_os_model_stats(void)
+{
+    return do_sys(SYS_MODEL_STATS, 0);
 }

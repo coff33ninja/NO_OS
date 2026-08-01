@@ -6,6 +6,9 @@
 #include "serial.h"
 #include "vga.h"
 #include "sched.h"
+#include "vmm.h"
+#include "model.h"
+#include "printk.h"
 
 void *noc_os_alloc(usize n)
 {
@@ -80,5 +83,35 @@ u64 noc_os_model_commit(u64 pages)
     if ((u64)t->model_weights_kb + need > (u64)t->model_budget_kb)
         return (u64)-1;
     t->model_weights_kb += (u32)need;
+    return 0;
+}
+
+u64 noc_os_model_touch(u64 page)
+{
+    task_t *t = sched_current();
+    if (!t->user || !t->cr3)
+        return 0; /* only ring-3 tasks have a model window */
+    if (page >= USER_MODEL_PAGES)
+        return (u64)-1;
+    return model_demand_fault(t, USER_MODEL_BASE + page * 4096, 0)
+               ? 0 : (u64)-1;
+}
+
+u64 noc_os_model_evict(u64 page)
+{
+    task_t *t = sched_current();
+    if (!t->user || !t->cr3)
+        return 0;
+    return model_evict_page(t, (usize)page) ? 0 : (u64)-1;
+}
+
+u64 noc_os_model_stats(void)
+{
+    task_t *t = sched_current();
+    printk("model: faults=%u resident=%u used=%u KB budget=%u KB\n",
+           (unsigned)t->model_faults,
+           (unsigned)model_resident_pages(t),
+           (unsigned)t->model_weights_kb,
+           (unsigned)t->model_budget_kb);
     return 0;
 }

@@ -3,6 +3,7 @@
 
 #include "types.h"
 #include "isr.h"
+#include "vmm.h"
 
 #define TASK_MAX          16
 #define TASK_KSTACK_SIZE  (16 * 1024)
@@ -34,7 +35,10 @@ typedef struct {
     usize       heap_used;  /* user heap bump cursor (bytes) */
     usize       heap_pages; /* user heap pages mapped */
     u32         model_budget_kb;  /* model weight RAM cap, default 8192 */
-    u32         model_weights_kb; /* committed weight pages (KB) */
+    u32         model_weights_kb; /* resident weight pages (KB) */
+    u32         model_faults;     /* demand faults serviced, lifetime */
+    u32         model_map;        /* resident model page bitmap (bit N = pg N) */
+    u64         model_frames[USER_MODEL_PAGES]; /* backing frame per page */
     i64         exit_code;
     coro_t      coro;       /* kernel task (task 0) coroutine context */
 } task_t;
