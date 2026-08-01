@@ -74,7 +74,7 @@ _(persists the NOC corpus and the trained model across reboot)_
       reboot persistence and reports `TEST PASS`
 
 ## M5 — ML/LLM & self-evolution (CLI-first)
-- [ ] Kernel-side micro-ANN: page/swap prefetcher + command predictor that
+- [x] Kernel-side micro-ANN: page/swap prefetcher + command predictor that
       learns user patterns (the memory-discipline core)
   - [x] NOC next-command predictor: bigram over the REPL command history
         (`Predict;`/`Hist;`/`ClearHist;`) with unigram fallback
