@@ -9,6 +9,7 @@
 #include "pmm.h"
 #include "interact.h"
 #include "model.h"
+#include "swap.h"
 
 extern int coro_save(coro_t *out);
 extern void coro_restore(coro_t *in);
@@ -125,6 +126,7 @@ void sched_exit_user(struct regs *r, i64 code)
     printk("process %u (%s) exited: %d\n",
            (unsigned)current->pid, current->name, (int)code);
     model_exit_task(current);
+    swap_exit_task(current);
     if (current->cr3)
         vmm_free_address_space(current->cr3);
     current->cr3 = 0;

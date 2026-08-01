@@ -20,6 +20,15 @@ typedef struct {
     u64 rbx, rbp, r12, r13, r14, r15;
 } coro_t;
 
+/* One swapped-out page for a task: the swap-region slot holding the page
+   whose virtual address is (vkey << 12). Looked up by linear scan on a page
+   fault; the array is capped so no dynamic allocation is needed per task. */
+#define SWAP_MAX_PER_TASK 128
+typedef struct {
+    u64  vkey; /* vaddr >> 12 */
+    u32  slot; /* swap region slot index */
+} swap_ent_t;
+
 typedef struct {
     u32         pid;
     task_state_t state;
@@ -40,6 +49,8 @@ typedef struct {
     usize       model_frames_n;   /* allocated length of frames/map (pages) */
     u64        *model_frames;     /* backing frame per page (lazy, kmalloc) */
     u32        *model_map;        /* resident page bitmap (lazy, kmalloc) */
+    swap_ent_t  swap_map[SWAP_MAX_PER_TASK]; /* pages currently swapped out */
+    u16         swap_count;       /* live entries in swap_map */
     i64         exit_code;
     coro_t      coro;       /* kernel task (task 0) coroutine context */
 } task_t;

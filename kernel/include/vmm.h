@@ -31,6 +31,7 @@ u64  vmm_kernel_cr3(void);
 u64  vmm_new_address_space(void);
 void vmm_map(u64 cr3, u64 vaddr, u64 paddr, u8 flags);
 void vmm_unmap(u64 cr3, u64 vaddr);
+u64  vmm_translate(u64 cr3, u64 vaddr);
 u64  vmm_alloc_user_pages(u64 cr3, usize pages, u64 vaddr);
 void vmm_free_address_space(u64 cr3);
 void vmm_load_cr3(u64 cr3);

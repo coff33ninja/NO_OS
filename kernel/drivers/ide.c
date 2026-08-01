@@ -4,6 +4,7 @@
 #include "string.h"
 
 static bool present;
+static u64  drive_sectors; /* LBA28 capacity from IDENTIFY (0 = unknown) */
 
 static void ide_wait_bsy(void)
 {
@@ -106,12 +107,34 @@ int ide_init(void)
     if (!(st & ATA_SR_ERR) || (st & ATA_SR_DRQ)) {
         /* Either DRQ set (real drive answering) or no ERR (emulated). */
         present = true;
-        printk("ide: primary master present\n");
+        drive_sectors = 0;
+        /* Read the 256-word IDENTIFY payload so the disk geometry is real,
+           not a hardcoded image size. Word 60-61 = LBA28 sector count. */
+        u32 spin = 0;
+        while ((st = inb(ATA_PRIMARY_BASE + 7)) & ATA_SR_BSY) {
+            if (++spin > 1000000)
+                break;
+        }
+        if (st & ATA_SR_DRQ) {
+            u16 id[256];
+            for (int i = 0; i < 256; i++)
+                id[i] = inw(ATA_PRIMARY_BASE + 0);
+            drive_sectors = ((u64)id[61] << 16) | id[60];
+        }
+        printk("ide: primary master present");
+        if (drive_sectors)
+            printk(" (%u MiB)", (unsigned)(drive_sectors / 2048));
+        printk("\n");
         return 1;
     }
 
     printk("ide: no drive on primary master\n");
     return 0;
+}
+
+u64 ide_drive_sectors(void)
+{
+    return drive_sectors;
 }
 
 bool ide_present(void)

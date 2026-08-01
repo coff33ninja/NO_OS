@@ -30,4 +30,10 @@ u64   noc_os_model_touch(u64 page);
 u64   noc_os_model_evict(u64 page);
 u64   noc_os_model_stats(void);
 
+/* M5: swap. SwapOut evicts a mapped page of the calling task to disk
+   (swap-in happens transparently on the next page fault); SwapInfo prints
+   the accounting. Operating on the calling task. */
+u64   noc_os_swap_out(u64 vaddr);
+u64   noc_os_swap_info(void);
+
 #endif

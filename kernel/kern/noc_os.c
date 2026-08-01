@@ -8,6 +8,7 @@
 #include "sched.h"
 #include "vmm.h"
 #include "model.h"
+#include "swap.h"
 #include "printk.h"
 
 void *noc_os_alloc(usize n)
@@ -113,5 +114,16 @@ u64 noc_os_model_stats(void)
            (unsigned)model_resident_pages(t),
            (unsigned)t->model_weights_kb,
            (unsigned)t->model_budget_kb);
+    return 0;
+}
+
+u64 noc_os_swap_out(u64 vaddr)
+{
+    return swap_out(sched_current(), vaddr) ? 0 : (u64)-1;
+}
+
+u64 noc_os_swap_info(void)
+{
+    swap_print_stats();
     return 0;
 }

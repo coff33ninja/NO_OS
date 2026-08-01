@@ -16,6 +16,8 @@
 #define SYS_MODEL_TOUCH  13
 #define SYS_MODEL_EVICT  14
 #define SYS_MODEL_STATS  15
+#define SYS_SWAP_OUT     16
+#define SYS_SWAP_INFO    17
 
 /* int 0x80 preserves every GPR except rax (the return value). Arg 1 in rdi. */
 static u64 do_sys(u64 num, u64 arg)
@@ -103,4 +105,14 @@ u64 noc_os_model_evict(u64 page)
 u64 noc_os_model_stats(void)
 {
     return do_sys(SYS_MODEL_STATS, 0);
+}
+
+u64 noc_os_swap_out(u64 vaddr)
+{
+    return do_sys(SYS_SWAP_OUT, vaddr);
+}
+
+u64 noc_os_swap_info(void)
+{
+    return do_sys(SYS_SWAP_INFO, 0);
 }

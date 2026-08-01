@@ -4,6 +4,7 @@
 #include "pit.h"
 #include "printk.h"
 #include "string.h"
+#include "swap.h"
 
 #define INODES_PER_BLOCK (FS_BLOCK_SIZE / sizeof(struct fs_inode))
 
@@ -147,21 +148,37 @@ static int read_any_sb(void)
 
 /* ---------------- format ---------------- */
 
-static u32 disk_total_blocks(void)
+static u64 disk_total_blocks(void)
 {
-    /* fixed 32 MiB raw image for now */
-    return 32 * 1024 * 1024 / FS_BLOCK_SIZE;
+    u64 sectors = ide_drive_sectors();
+    if (!sectors) {
+        /* Geometry unknown (IDENTIFY returned no payload): fall back to the
+           probe default so a disk-less/unknown boot still formats. */
+        sectors = 32 * 1024 * 1024 / SECTOR_SIZE;
+    }
+    return sectors;
+}
+
+/* Blocks available to the filesystem = everything below the swap tail. The
+   swap region's size is derived from the same real disk capacity, so the two
+   always partition the disk with no hardcoded sizes. */
+static u64 fs_usable_blocks(void)
+{
+    struct swap_geom g;
+    swap_geometry(disk_total_blocks(), &g);
+    return g.start;
 }
 
 int fs_format(void)
 {
-    u32 total = disk_total_blocks();
+    u64 total = fs_usable_blocks();
     u64 bitmap_blocks = (total + 8 * 512 - 1) / (8 * 512);
     u64 inode_blocks = (FS_INODE_COUNT * sizeof(struct fs_inode) + FS_BLOCK_SIZE - 1) / FS_BLOCK_SIZE;
     u64 data_start = 2 + bitmap_blocks + inode_blocks;
     u64 nblocks = total - data_start;
 
-    /* recompute against final cluster count (stable for 32 MiB) */
+    /* Recompute against the final cluster count (bitmap sizing is exact
+       only after data_start is known; the loop converges in one pass). */
     bitmap_blocks = (nblocks + 8 * 512 - 1) / (8 * 512);
     data_start = 2 + bitmap_blocks + inode_blocks;
     nblocks = total - data_start;
@@ -546,8 +563,12 @@ int fs_init(void)
 {
     if (!ide_present())
         return -1;
-    if (read_any_sb() != 0) {
-        printk("fs: no filesystem found, formatting\n");
+    /* Format when there is no filesystem, or when the on-disk data area
+       spills into the swap tail (a disk formatted before swap reservation,
+       or attached to a smaller/different drive). */
+    if (read_any_sb() != 0 ||
+        (u64)sb.data_start + sb.block_count > fs_usable_blocks()) {
+        printk("fs: no filesystem or geometry mismatch, formatting\n");
         if (fs_format() != 0) {
             printk("fs: format FAILED\n");
             return -1;

@@ -5,6 +5,7 @@
 #include "sched.h"
 #include "train.h"
 #include "trans.h"
+#include "swap.h"
 
 #define KBD_DATA 0x60
 #define BUF_SIZE 256
@@ -167,6 +168,7 @@ int kbd_readc(void)
         __asm__ volatile("sti; hlt");
         train_poll_idle();     /* idle retrain fires while no keys arrive */
         trans_poll_idle();
+        swap_reclaim();        /* pressure-driven eviction while idle */
     }
     return c;
 }

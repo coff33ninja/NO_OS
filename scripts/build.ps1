@@ -68,6 +68,7 @@ $csrcs = @(
     'mm\vmm.c'
     'mm\model.c'
     'mm\pgpred.c'
+    'mm\swap.c'
     'fs\noosfs.c'
     'arch\x86_64\gdt.c'
     'arch\x86_64\tss.c'

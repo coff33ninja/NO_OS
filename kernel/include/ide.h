@@ -26,4 +26,8 @@ int  ide_read_sectors(u32 lba, usize count, void *buf);
 int  ide_write_sectors(u32 lba, usize count, const void *buf);
 bool ide_present(void);
 
+/* Total capacity in 512-byte sectors, from the IDENTIFY payload read at
+   ide_init(). 0 when the drive reported no geometry (or is absent). */
+u64  ide_drive_sectors(void);
+
 #endif

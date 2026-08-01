@@ -5,6 +5,7 @@
 #include "gdt.h"
 #include "pgpred.h"
 #include "model.h"
+#include "swap.h"
 
 #define EXC_COUNT 32
 
@@ -62,6 +63,17 @@ void isr_dispatch(u64 vector, u64 error, struct regs *r)
             if (vector == 14) { /* page fault */
                 u64 cr2;
                 __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+                if (swap_has(t, cr2)) {
+                    /* A page we evicted to disk: swap it back in, feed the
+                       page-access predictor and pre-load the page it expects
+                       next, then retry the faulting instruction. */
+                    if (swap_in(t, cr2) == 0) {
+                        pgpred_fault(cr2);
+                        swap_prefetch(t);
+                        return;
+                    }
+                    /* Swap-in failed: fall through to the kill path. */
+                }
                 if (model_demand_fault(t, cr2, error)) {
                     /* Demand-paged a read-only model weight page in; feed the
                        page-access predictor and pre-load the page it expects

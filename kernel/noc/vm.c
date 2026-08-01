@@ -741,6 +741,24 @@ static bool b_ModelStats(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_SwapOut(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    *ret = noc_os_swap_out(args[0]);
+    return true;
+}
+
+static bool b_SwapInfo(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    *ret = noc_os_swap_info();
+    return true;
+}
+
 static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
 {
     (void)vm;
@@ -749,7 +767,7 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
     noc_os_puts("commands: Help, Version, MemInfo, Echo, FaultTest, Reboot, "
                 "Print, PrintLn, Sleep, Time, KeyGet, KeyPressed, Alloc, Free, "
                 "MemSet, MemCpy, Len, PageFault, ModelBudget, ModelCommit, "
-                "ModelTouch, ModelEvict, ModelStats, "
+                "ModelTouch, ModelEvict, ModelStats, SwapOut, SwapInfo, "
                 "Spawn, Ps, Demo, SaveFile, ReadFile, DeleteFile, ListDir, "
                 "StatFile, FormatDisk, Run, Predict, Hist, ClearHist, PgPred, PgPredClear, "
                 "ModelInfo, LogInfo, LogDump, LogSave, LogClear, "
@@ -1546,6 +1564,8 @@ const noc_builtin noc_builtins[] = {
     { "ModelTouch",  NTYPE_I64, 1, false, b_ModelTouch },
     { "ModelEvict",  NTYPE_I64, 1, false, b_ModelEvict },
     { "ModelStats",  NTYPE_I64, 0, false, b_ModelStats },
+    { "SwapOut",     NTYPE_I64, 1, false, b_SwapOut },
+    { "SwapInfo",    NTYPE_VOID, 0, false, b_SwapInfo },
     { "Help",       NTYPE_VOID, 0, false, b_Help },
 #ifndef NOOS_USER
     { "Echo",       NTYPE_VOID, 1, false, b_Echo },

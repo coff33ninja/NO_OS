@@ -19,6 +19,8 @@
 #define SYS_MODEL_TOUCH  13
 #define SYS_MODEL_EVICT  14
 #define SYS_MODEL_STATS  15
+#define SYS_SWAP_OUT     16
+#define SYS_SWAP_INFO    17
 
 void syscall_dispatch(struct regs *r);
 

@@ -14,6 +14,7 @@
 #include "sched.h"
 #include "ide.h"
 #include "fs.h"
+#include "swap.h"
 #include "noc.h"
 #include "interact.h"
 #include "train.h"
@@ -163,6 +164,7 @@ void kmain(u32 mb_info)
     pmm_init(mb_info);
     heap_test();
     disk_selftest();
+    swap_init();
     fs_init();
     fs_selftest();
 
@@ -183,6 +185,9 @@ void kmain(u32 mb_info)
     il_load();
     train_init();
     trans_init();
+
+    /* Opportunistic pressure-driven eviction whenever the CPU is idle. */
+    sched_register_idle_hook(swap_reclaim);
 
     noc_repl();
 

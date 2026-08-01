@@ -91,6 +91,32 @@ void vmm_unmap(u64 cr3, u64 vaddr)
     pt[pti] = 0;
 }
 
+/* Resolve a virtual address to its backing physical frame (0 if not mapped).
+   Used by swap_out/swap_in to reach the raw page content. */
+u64 vmm_translate(u64 cr3, u64 vaddr)
+{
+    u64 *pml4t = (u64 *)cr3;
+    u64 *pdpt, *pd, *pt;
+    usize pml4i = (vaddr >> 39) & 0x1FF;
+    usize pdpti = (vaddr >> 30) & 0x1FF;
+    usize pdi   = (vaddr >> 21) & 0x1FF;
+    usize pti   = (vaddr >> 12) & 0x1FF;
+
+    if (!(pml4t[pml4i] & 1))
+        return 0;
+    pdpt = (u64 *)(pml4t[pml4i] & ~0xFFFUL);
+    if (!(pdpt[pdpti] & 1))
+        return 0;
+    pd = (u64 *)(pdpt[pdpti] & ~0xFFFUL);
+    if (!(pd[pdi] & 1))
+        return 0;
+    pt = (u64 *)(pd[pdi] & ~0xFFFUL);
+    u64 e = pt[pti];
+    if (!(e & 1))
+        return 0;
+    return e & ~0xFFFUL;
+}
+
 u64 vmm_alloc_user_pages(u64 cr3, usize pages, u64 vaddr)
 {
     for (usize i = 0; i < pages; i++) {

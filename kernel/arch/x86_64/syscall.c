@@ -6,6 +6,7 @@
 #include "pmm.h"
 #include "noc_os.h"
 #include "model.h"
+#include "swap.h"
 #include "string.h"
 #include "printk.h"
 
@@ -137,6 +138,13 @@ void syscall_dispatch(struct regs *r)
         r->rax = 0;
         break;
     }
+    case SYS_SWAP_OUT:
+        r->rax = swap_out(t, (u64)a1) ? 0 : (u64)-1;
+        break;
+    case SYS_SWAP_INFO:
+        swap_print_stats();
+        r->rax = 0;
+        break;
     default:
         r->rax = (u64)-1;
         break;
