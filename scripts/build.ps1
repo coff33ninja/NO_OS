@@ -195,8 +195,7 @@ function Invoke-Test {
         '-display', 'none',
         '-drive', "file=$diskImg,format=raw,if=ide",
         '-serial', "file:$log",
-        '-monitor', "tcp:127.0.0.1:$monPort,server,nowait",
-        '-no-reboot'
+        '-monitor', "tcp:127.0.0.1:$monPort,server,nowait"
     ) -PassThru
 
     function Send-Keys {
@@ -258,7 +257,7 @@ function Invoke-Test {
         $stream = $client.GetStream()
         $sw = [System.IO.StreamWriter]::new($stream)
         $sw.AutoFlush = $true
-        $sw.Write($command)
+        $sw.Write($command + "`n")
         # Let QEMU consume the command before closing; closing with unread
         # monitor data (the greeting) can send a TCP RST that drops it.
         Start-Sleep -Milliseconds 300
@@ -313,6 +312,24 @@ function Invoke-Test {
             if ($c) {
                 $c = $c -replace "`r`n", "`n"
                 if ($c -match $pattern) { return $true }
+            }
+        }
+        return $false
+    }
+
+    # Wait for a pattern strictly in the portion of the log appended after a
+    # captured baseline. Used after a system_reset to tell the second boot
+    # apart from the first on the same serial log.
+    function Wait-Appended {
+        param([string]$baseline, [string]$pattern, [int]$timeoutSec = 10)
+        $deadline = (Get-Date).AddSeconds($timeoutSec)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 200
+            if ($p.HasExited) { break }
+            $c = Get-Log
+            if ($c -and $c.Length -gt $baseline.Length) {
+                $seg = $c.Substring($baseline.Length)
+                if ($seg -match $pattern) { return $true }
             }
         }
         return $false
@@ -520,6 +537,51 @@ function Invoke-Test {
             throw "Ps: expected 3+ tasks, saw $($tasks.Count)"
         }
 
+        # ---- M4: filesystem persistence across reboot ----
+        # Save a file, reset the machine with QEMU's system_reset, then verify
+        # the second boot mounts the existing filesystem (no re-format) and the
+        # file survives. Keeping the reboot in-process means the serial log is
+        # appended, so phase-B assertions use the post-reset baseline.
+        Send-Keys "SaveFile(`"hello.txt`", `"Hello FS`");`n"
+        if (-not (Wait-LogCount 'fs: saved hello\.txt \(8 bytes\)' 2)) {
+            throw 'persistence SaveFile did not report the saved size'
+        }
+        $base = Get-Log
+        Send-Monitor 'system_reset'
+        if (-not (Wait-Appended $base 'keyboard echo test' 30)) {
+            throw 'guest did not reboot after system_reset'
+        }
+        Send-Keys "ok`n`n"
+        if (-not (Wait-Appended $base 'boot-test-ok')) {
+            throw 'phase-B keyboard echo did not yield boot-test-ok'
+        }
+        if (-not (Wait-Appended $base 'no/os> ')) {
+            throw 'phase-B shell prompt did not appear'
+        }
+        if (-not (Wait-Appended $base 'fs: mounted')) {
+            throw 'phase-B filesystem did not mount'
+        }
+        $after = Get-Log
+        if ($after.Length -gt $base.Length) {
+            $seg = $after.Substring($base.Length)
+            if ($seg -match 'no filesystem found|format FAILED') {
+                throw 'filesystem was re-formatted on reboot (data loss)'
+            }
+        }
+        Send-Keys "ListDir;`n"
+        if (-not (Wait-Appended $base 'hello\.txt\s+8 bytes')) {
+            throw 'phase-B ListDir did not show the persisted file'
+        }
+        Send-Keys "Print(`"%s`", ReadFile(`"hello.txt`"));`n"
+        if (-not (Wait-Appended $base "`nHello FS")) {
+            throw 'phase-B ReadFile did not return persisted content'
+        }
+        # Reset the disk so future runs start from a known-empty filesystem.
+        Send-Keys "FormatDisk;`n"
+        if (-not (Wait-Appended $base 'fs: formatted and remounted')) {
+            throw 'phase-B FormatDisk did not report success'
+        }
+
         # Deliberate fault as the final check: #UD must trap, not triple-fault.
         Send-Keys "FaultTest`n"
         if (-not (Wait-LogPattern 'EXCEPTION: Invalid Opcode')) {
@@ -528,7 +590,7 @@ function Invoke-Test {
 
         $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
         Write-Host $content
-        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), and fault trapping all verified'
+        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, and fault trapping all verified'
         exit 0
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
