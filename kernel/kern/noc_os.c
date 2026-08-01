@@ -119,7 +119,7 @@ u64 noc_os_model_stats(void)
 
 u64 noc_os_swap_out(u64 vaddr)
 {
-    return swap_out(sched_current(), vaddr) ? 0 : (u64)-1;
+    return swap_out(sched_current(), vaddr) == 0 ? 0 : (u64)-1;
 }
 
 u64 noc_os_swap_info(void)

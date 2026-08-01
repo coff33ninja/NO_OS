@@ -1230,6 +1230,33 @@ function Invoke-Test {
             throw 'transformer idle retrain did not fire after the idle threshold elapsed'
         }
 
+        # ---- M6: kernel-managed swap (evict + transparent fault-in) ----
+        # A spawned user process allocates a heap page, writes a known pattern
+        # ("AAA...", Len 63), SwapOut()s the page (the kernel evicts it to the
+        # disk swap region and unmaps it), then reads it back with Len(). The
+        # read faults the page in transparently and must restore the exact
+        # bytes, after which SwapInfo shows the slot freed again. If swap-in
+        # broke, the fault would kill the process and SWAP-OK would never
+        # print. SwapOut's return value is also asserted (0 = ok) to lock the
+        # syscall convention.
+        $mSlots = [regex]::Match((Get-Log), 'swap: (\d+) slots')
+        if (-not $mSlots.Success) { throw 'swap init did not report the slot count' }
+        $swapTotal = $mSlots.Groups[1].Value
+        $baseSw = Get-Log
+        Send-Keys "Spawn(`"p=Alloc(64);MemSet(p,65,63);MemSet(p+63,0,1);r=SwapOut(p);SwapInfo();v=Len(p);PrintLn(v);SwapInfo();if(r==0)PrintLn(`\`"SWAP-OK`\`")else PrintLn(`\`"SWAP-FAIL`\`");`");`n"
+        if (-not (Wait-Appended $baseSw "swap: 1/$swapTotal slots, [0-9]+ out, [0-9]+ in, [0-9]+ reclaim")) {
+            throw 'SwapOut did not evict the page to the swap region'
+        }
+        if (-not (Wait-Appended $baseSw '`n63`n')) {
+            throw 'swap-in did not restore the exact bytes (Len != 63)'
+        }
+        if (-not (Wait-Appended $baseSw "swap: 0/$swapTotal slots, [0-9]+ out, [0-9]+ in, [0-9]+ reclaim")) {
+            throw 'swap-in did not free the swap slot'
+        }
+        if (-not (Wait-Appended $baseSw 'SWAP-OK')) {
+            throw 'SwapOut return was not 0 and/or the process died on swap-in'
+        }
+
         # Deliberate fault as the final check: #UD must trap, not triple-fault.
         Send-Keys "FaultTest`n"
         if (-not (Wait-LogPattern 'EXCEPTION: Invalid Opcode')) {
@@ -1238,10 +1265,11 @@ function Invoke-Test {
 
         $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
         Write-Host $content
-        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), bigram generation from the trained model, model-drafted NOC program driven transformer-first (micro-transformer consulted, bigram fallback) and spawned as a ring-3 user process with output reaching the shell and feeding back into the retrain loop, versioned rollback-safe generation corpus, demand-paged read-only transformer weight pages (fault-in, write-trap, budget eviction/refault), page prefetch pre-loading the predicted page from fault history, deterministic fixed-point transformer training/eval (TransTrain/TransEval/TransReset), transformer idle auto-retrain (TransIdle trigger fires), and fault trapping all verified'
+        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), bigram generation from the trained model, model-drafted NOC program driven transformer-first (micro-transformer consulted, bigram fallback) and spawned as a ring-3 user process with output reaching the shell and feeding back into the retrain loop, versioned rollback-safe generation corpus, demand-paged read-only transformer weight pages (fault-in, write-trap, budget eviction/refault), page prefetch pre-loading the predicted page from fault history, deterministic fixed-point transformer training/eval (TransTrain/TransEval/TransReset), transformer idle auto-retrain (TransIdle trigger fires), kernel-managed swap (evict to the dynamic disk swap region, transparent fault-in restoring exact bytes, slot accounting, SwapOut syscall return convention), and fault trapping all verified'
         exit 0
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+        try { $p.Refresh(); Write-Host "QEMU exit code: $($p.ExitCode)" } catch { }
     }
 }
 

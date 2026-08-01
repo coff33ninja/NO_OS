@@ -139,7 +139,7 @@ void syscall_dispatch(struct regs *r)
         break;
     }
     case SYS_SWAP_OUT:
-        r->rax = swap_out(t, (u64)a1) ? 0 : (u64)-1;
+        r->rax = swap_out(t, (u64)a1) == 0 ? 0 : (u64)-1;
         break;
     case SYS_SWAP_INFO:
         swap_print_stats();
