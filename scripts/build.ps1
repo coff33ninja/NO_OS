@@ -58,6 +58,7 @@ $csrcs = @(
     'noc\vm.c'
     'noc\repl.c'
     'noc\exec.c'
+    'noc\predict.c'
     'mm\pmm.c'
     'mm\heap.c'
     'mm\vmm.c'
@@ -605,6 +606,25 @@ function Invoke-Test {
         Send-Keys "FormatDisk;`n"
         if (-not (Wait-Appended $base 'fs: formatted and remounted')) {
             throw 'phase-B FormatDisk did not report success'
+        }
+
+        # ---- M5: next-command predictor (bigram over REPL history) ----
+        # Seed a deterministic command sequence with valid expressions, then
+        # Predict; must suggest the most frequent follower of the last command.
+        # History (after ClearHist): 9*9; 7*7; 9*9; 7*7; 9*9;
+        #   bigrams: 9*9;->7*7; x2, 7*7;->9*9; x2, last = 9*9; => predict 7*7;
+        Send-Keys "ClearHist;`n"
+        if (-not (Wait-LogPattern 'hist: cleared')) {
+            throw 'ClearHist did not report success'
+        }
+        Send-Keys "9*9;`n"
+        Send-Keys "7*7;`n"
+        Send-Keys "9*9;`n"
+        Send-Keys "7*7;`n"
+        Send-Keys "9*9;`n"
+        Send-Keys "Predict;`n"
+        if (-not (Wait-LogPattern 'predict: 7\*7;')) {
+            throw 'Predict did not suggest the most frequent follower'
         }
 
         # Deliberate fault as the final check: #UD must trap, not triple-fault.

@@ -2,6 +2,7 @@
 #include "noc_os.h"
 #include "string.h"
 #include "printk.h"
+#include "predict.h"
 
 void noc_repl(void)
 {
@@ -9,6 +10,7 @@ void noc_repl(void)
     printk("NOC shell. type 'Help;' or NOC code.\n");
     for (;;) {
         line_read(line, sizeof(line), "no/os> ");
+        cmdhist_add(line);
         noc_exec_line(line);
     }
 }

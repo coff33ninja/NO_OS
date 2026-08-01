@@ -69,6 +69,9 @@ _(persists the NOC corpus and the trained model across reboot)_
 ## M5 — ML/LLM & self-evolution (CLI-first)
 - [ ] Kernel-side micro-ANN: page/swap prefetcher + command predictor that
       learns user patterns (the memory-discipline core)
+  - [x] NOC next-command predictor: bigram over the REPL command history
+        (`Predict;`/`Hist;`/`ClearHist;`) with unigram fallback
+  - [ ] Page/swap prefetcher from access patterns
 - [ ] Model weights are shared read-only pages, demand-paged from disk and
       evictable under pressure; `model_budget(n)` syscall enforces a hard
       memory cap per LLM process

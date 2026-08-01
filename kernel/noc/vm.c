@@ -8,6 +8,7 @@
 #include "pmm.h"
 #include "heap.h"
 #include "fs.h"
+#include "predict.h"
 #endif
 
 #define NOC_STACK_SIZE 4096
@@ -684,7 +685,8 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
     noc_os_puts("commands: Help, Version, MemInfo, Echo, FaultTest, Reboot, "
                 "Print, PrintLn, Sleep, Time, KeyGet, KeyPressed, Alloc, Free, "
                 "MemSet, MemCpy, Len, Spawn, Ps, Demo, SaveFile, ReadFile, "
-                "DeleteFile, ListDir, StatFile, FormatDisk\n");
+                "DeleteFile, ListDir, StatFile, FormatDisk, Run, Predict, "
+                "Hist, ClearHist\n");
     *ret = 0;
     return true;
 }
@@ -1042,6 +1044,48 @@ static bool b_Run(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_Predict(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    const char *p = cmdhist_predict();
+    char buf[256];
+    if (p)
+        sprintk(buf, sizeof(buf), "predict: %s\n", p);
+    else
+        sprintk(buf, sizeof(buf), "predict: (no history)\n");
+    noc_os_puts(buf);
+    *ret = 0;
+    return true;
+}
+
+static bool b_Hist(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    char buf[CMD_LEN + 16];
+    for (usize i = 1; i <= cmdhist_count(); i++) {
+        sprintk(buf, sizeof(buf), "hist %u: %s\n", (unsigned)(i - 1),
+                cmdhist_entry(i));
+        noc_os_puts(buf);
+    }
+    *ret = 0;
+    return true;
+}
+
+static bool b_ClearHist(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    cmdhist_clear();
+    noc_os_puts("hist: cleared\n");
+    *ret = 0;
+    return true;
+}
+
 #endif /* !NOOS_USER */
 
 const noc_builtin noc_builtins[] = {
@@ -1073,6 +1117,9 @@ const noc_builtin noc_builtins[] = {
     { "StatFile",   NTYPE_VOID, 1, false, b_StatFile },
     { "FormatDisk", NTYPE_VOID, 0, false, b_FormatDisk },
     { "Run",        NTYPE_VOID, 1, false, b_Run },
+    { "Predict",    NTYPE_VOID, 0, false, b_Predict },
+    { "Hist",       NTYPE_VOID, 0, false, b_Hist },
+    { "ClearHist",  NTYPE_VOID, 0, false, b_ClearHist },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);
