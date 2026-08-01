@@ -61,6 +61,7 @@ $csrcs = @(
     'mm\pmm.c'
     'mm\heap.c'
     'mm\vmm.c'
+    'fs\noosfs.c'
     'arch\x86_64\gdt.c'
     'arch\x86_64\tss.c'
     'arch\x86_64\idt.c'
@@ -329,6 +330,12 @@ function Invoke-Test {
             $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
             Write-Host $content
             throw 'IDE disk self-test did not pass'
+        }
+        # M4: filesystem formatted/mounted and a cluster round-trips.
+        if (-not (Wait-LogPattern 'fs test: ok \(cluster \d+ alloc/write/read/free\)')) {
+            $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
+            Write-Host $content
+            throw 'filesystem cluster round-trip did not pass'
         }
         Send-Keys "ok`n`n"
         if (-not (Wait-LogPattern 'boot-test-ok')) {

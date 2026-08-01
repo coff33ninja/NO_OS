@@ -13,7 +13,42 @@
 #include "heap.h"
 #include "sched.h"
 #include "ide.h"
+#include "fs.h"
 #include "noc.h"
+
+static void fs_selftest(void)
+{
+    if (!fs_mounted()) {
+        printk("fs test: SKIP (no filesystem)\n");
+        return;
+    }
+    u32 c = fs_alloc_cluster();
+    if (c == (u32)-1) {
+        printk("fs test: FAIL (no free cluster)\n");
+        return;
+    }
+    u8 buf[SECTOR_SIZE];
+    memset(buf, 0x5A, sizeof(buf));
+    if (fs_cluster_write(c, buf) != 0) {
+        printk("fs test: FAIL (write)\n");
+        return;
+    }
+    u8 rbuf[SECTOR_SIZE];
+    memset(rbuf, 0, sizeof(rbuf));
+    if (fs_cluster_read(c, rbuf) != 0) {
+        printk("fs test: FAIL (read)\n");
+        return;
+    }
+    bool bad = false;
+    for (usize i = 0; i < sizeof(buf); i++)
+        bad |= rbuf[i] != 0x5A;
+    fs_free_cluster(c);
+    fs_sync_bitmap();
+    if (bad)
+        printk("fs test: FAIL (data mismatch)\n");
+    else
+        printk("fs test: ok (cluster %u alloc/write/read/free)\n", (unsigned)c);
+}
 
 static void disk_selftest(void)
 {
@@ -125,6 +160,8 @@ void kmain(u32 mb_info)
     pmm_init(mb_info);
     heap_test();
     disk_selftest();
+    fs_init();
+    fs_selftest();
 
     sched_init();
 
