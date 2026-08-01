@@ -4,6 +4,10 @@ NOC is the shell and application language of NO_OS, a HolyC-inspired,
 C-like language that compiles to bytecode and runs on a stack VM inside the
 kernel. This document specifies the M2 subset (interactive REPL + scripts).
 
+> **Naming:** when NOC matures enough to self-host (M6), it officially earns
+> the name **NOClang** — NOC + "lang". Until then, any "NOClang" mention
+> (e.g. the M10 TUI) is the informal preview of that name.
+
 ## 1. Execution model
 
 - Every REPL line is a sequence of top-level statements.

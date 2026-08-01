@@ -3,6 +3,13 @@
 Each milestone ends with bootable, testable acceptance criteria. Work flows:
 spec -> implement -> boot-test -> commit.
 
+**The CLI is the core of NO_OS.** M10 defines the NOClang TUI, a full-screen
+text shell that is also the home of the AI/ML/LLM factors: prediction,
+completion, code generation, self-evolution, and service management all
+surface through the same text interface. The GUI is explicitly **deferred to
+an unnumbered future stage** — text first, graphics later, TempleOS-style
+but command-line-first.
+
 ## M0 — Toolchain & first boot (DONE)
 - [x] Verify `zig cc` emits ELF64 freestanding for x86-64
 - [x] Repo skeleton, docs, build scripts
@@ -99,9 +106,14 @@ _(persists the NOC corpus and the trained model across reboot)_
       mapping, writes are refused, and budget pressure evicts/refaults pages
       (harness-verified); `model_invalidate_all` drops every task's frames on
       reconfiguration
-  - [ ] Numerically validate the forward pass on a controlled corpus
-  - [ ] SGD backprop training (`trans_train`/`trans_eval`) with batch
-        accumulation and fixed-point loss, then retrain from the log
+  - [x] SGD backprop training (`trans_train`/`trans_eval`) with fixed-point
+        loss and per-tensor normalized weight updates, retraining from the
+        interaction log tail: `TransTrain(<why>[, <passes>]);` runs full
+        int8/Q8.8 backprop over the last `ctx+2` bytes (two next-byte
+        targets), `TransEval;` reports in-corpus accuracy + loss, and
+        `TransReset;` re-randomizes deterministically — reset + identical
+        log reproduces the identical loss (harness-verified, loss 8.09
+        bits/byte on both runs)
 - [ ] Self-evolution loop: log interactions -> idle retrain -> model drafts
       NOC code -> runs sandboxed -> output feeds the (versioned,
       rollback-safe) corpus
@@ -137,8 +149,8 @@ _(persists the NOC corpus and the trained model across reboot)_
         `PrintLn("DRAFT-OK");` x5: seed `PrintLn("DRAFT-OK"` (balanced
         string, closing quote in the seed) completes deterministically to
         `PrintLn("DRAFT-OK");`, spawns, and the bare `DRAFT-OK` reaches the
-        shell. (SGD training and held-out evaluation are the next M5 slice;
-        the transformer's demand-paged window is harness-verified above.)
+        shell. (Held-out evaluation is a later slice; SGD training is
+        harness-verified via `TransTrain` above.)
   - [x] Versioned, rollback-safe corpus: `DraftRun` writes accepted drafts to
         `corpNNNN.noc` with a `@@ GENERATED:` metadata header and advances
         the version (`CorpusInfo;`); a rejected (syntax-failing) draft leaves
@@ -153,13 +165,66 @@ _(persists the NOC corpus and the trained model across reboot)_
 - [ ] Bytecode -> x86-64 JIT in a code heap
 - [ ] Self-host the NOC compiler
 
+  **Naming twist:** once NOC matures enough to self-host, it earns the
+  name **NOClang** (NOC + "lang") — the day the language compiles itself,
+  it stops being "Not Quite C" and becomes a real compiler target. The M10
+  TUI already previews the name informally; M6 is where it becomes official.
+
 ## M7 — Stretch: fun
 - [ ] PC-speaker audio
 - [ ] Games / demo programs
 
-## M8 — Graphics (TempleOS soul) (GUI last)
-- [ ] Graphics spec written (`docs/M8-GRAPHICS.md`)
+## M9 — Services & Task Manager (NOC)
+The task manager is the system-service layer: the OS's own services (fs,
+interact logger, idle trainer, predictor) and user services are managed the
+same way Windows SCM / Linux systemd manage theirs. The AI/ML/LLM machinery
+is one service class, not the whole story. Full spec: `docs/M9-TASKMANAGER.md`
+- [ ] Service registry (`svc_t`: `SVC_KERNEL`/`SVC_USER`, autostart, restart
+      policy) wired to the process table (`kernel/kern/sched.c`)
+- [ ] Syscall surface 16-21: `SYS_SVC_COUNT/PID/FIELD/BUDGET/PAUSE/KILL`
+      (extends `kernel/include/syscall.h`, currently 0-15)
+- [ ] CPU budget per service: `cpu_budget_ms` + per-tick `cpu_ticks` accounting
+      in `sched_on_tick()` (`sched.c:134`) — implements audit finding #7
+- [ ] Restart policy enforced in `sched_exit_user` (`sched.c:120`) for
+      `SVC_RESTART`/`SVC_RESTART_EXITCODE` services
+- [ ] NOC builtins: `SvcCount`, `SvcPid`, `SvcField`, `SvcBudget`, `SvcPause`,
+      `SvcKill`, `Ps` (process table dump)
+- [ ] `taskmgr.noc` — the manager itself as a NOC policy program
+- [ ] Accept: `Ps;` lists services and their CPU budgets; a paused service is
+      suspended (`SUSPENDED`) and resumes when unpaused; a killed service
+      restarts per policy (harness-verified)
+
+## M10 — NOClang TUI (the CLI — biggest part, home of the AI factors)
+The full-screen text shell. This is the **core of NO_OS**: prediction,
+completion, code generation, self-evolution, and service management all
+surface through the same text interface. It is a TUI, not a GUI — pure
+80x25 VGA text cells. Full spec: `docs/M10-CLI.md`
+- [ ] Screen model: status bar (row 0), output viewport (rows 1-22), input
+      editor (rows 23-24); VGA API v2 (`vga_clear_rect`, `vga_putc_at`,
+      `vga_puts_at`, `vga_set_cursor`, `vga_scroll_region`) on top of the
+      existing `kernel/drivers/vga.c` (80x25, u16 cells at 0xB8000)
+- [ ] Keyboard v2: decode F1-F10 (scancodes 0x3B-0x44, currently undecoded in
+      `kernel/include/kbd.h`) as `KBD_F1..F10` (0x90-0x99) + `KBD_PGUP/PGDN`
+      (0x9A/0x9B)
+- [ ] Key map: F1 Help, F2 Ps, F3 MemInfo, F5 Run, F9 service pane, F10
+      ListDir; `SetKey` rebindable
+- [ ] Completion popup over the output viewport fed by the M5 predictor
+      (history, `corpNNNN.noc` corpus, symbol table)
+- [ ] Multi-line NOClang via `line_balanced()` + continuation `▸` (breaks
+      length-limited REPL single-line `line.c` buffer)
+- [ ] Service pane (M9) embedded as a screen region, not a separate app
+- [ ] Serial stays a byte-exact mirror so the existing harness asserts remain
+      valid (the TUI does not break automation)
+- [ ] Accept: an interactive multi-line NOC program is edited, run, and its
+      output scrolls in the viewport; completion popup suggests a command
+      from the corpus; F9 shows live service state (screendump + serial
+      verified)
+
+## Future (unnumbered) — Graphics / GUI
+Deferred by design. Text first, graphics later — the CLI is the core, and the
+TempleOS-soul graphics milestone waits until the text surface is complete.
 - [ ] VGA 640x480 16-color graphics mode (mode 0x12, register-level mode set)
 - [ ] 2D primitives (`Pixel`/`Line`/`Rect`/`FillRect`) + bitmap font `Text`
 - [ ] Sprite bank drawable from NOC source (`Sprite`)
 - [ ] Accept: a NOC program animates a moving sprite (screendump-verified)
+  (design retained in `docs/M8-GRAPHICS.md`; unnumbered, parked behind M10)

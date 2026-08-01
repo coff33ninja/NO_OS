@@ -755,7 +755,8 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
                 "ModelInfo, LogInfo, LogDump, LogSave, LogClear, "
                 "Train, TrainIdle, TrainReset, PredictBigram, DraftRun, "
                 "CorpusInfo, CorpusRollback, "
-                "TransInfo, TransMem, TransConfig, TransPredict\n");
+                "TransInfo, TransMem, TransConfig, TransPredict, "
+                "TransTrain, TransEval, TransReset\n");
     *ret = 0;
     return true;
 }
@@ -1430,6 +1431,37 @@ static bool b_TransPredict(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_TransTrain(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    const char *why = (const char *)args[0];
+    usize passes = (n >= 2) ? (usize)args[1] : 1;
+    *ret = (u64)trans_train(why, 0, passes);
+    return true;
+}
+
+static bool b_TransEval(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    *ret = (u64)trans_eval();
+    return true;
+}
+
+static bool b_TransReset(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    trans_reset();
+    noc_os_puts("trans: reset\n");
+    *ret = 0;
+    return true;
+}
+
 #endif /* !NOOS_USER */
 
 const noc_builtin noc_builtins[] = {
@@ -1487,6 +1519,9 @@ const noc_builtin noc_builtins[] = {
     { "TransMem",     NTYPE_VOID, 1, false, b_TransMem },
     { "TransConfig",  NTYPE_VOID, 2, false, b_TransConfig },
     { "TransPredict", NTYPE_I64,  1, false, b_TransPredict },
+    { "TransTrain",   NTYPE_I64,  2, true,  b_TransTrain },
+    { "TransEval",    NTYPE_I64,  0, false, b_TransEval },
+    { "TransReset",   NTYPE_VOID, 0, false, b_TransReset },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);

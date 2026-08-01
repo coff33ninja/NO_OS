@@ -38,7 +38,9 @@ See `docs/ADR/` for detailed rationales:
 - [M3-USERMODE.md](docs/M3-USERMODE.md) - User mode and multitasking (complete)
 - [M4-FILESYSTEM.md](docs/M4-FILESYSTEM.md) - Persistent storage (current focus)
 - [M5-AI.md](docs/M5-AI.md) - Machine learning and self-evolution (AI/ML focus)
-- [M8-GRAPHICS.md](docs/M8-GRAPHICS.md) - Graphics subsystem (GUI last)
+- [M9-TASKMANAGER.md](docs/M9-TASKMANAGER.md) - Services & task manager (NOC)
+- [M10-CLI.md](docs/M10-CLI.md) - NOClang TUI (the CLI core, home of the AI factors)
+- [M8-GRAPHICS.md](docs/M8-GRAPHICS.md) - Graphics design (deferred, unnumbered)
 
 ### Memory & Budget Tracking
 - [MEMORY-BUDGET.md](docs/MEMORY-BUDGET.md) - Tracks RAM usage for AI workload feasibility
@@ -53,7 +55,9 @@ See `docs/ADR/` for detailed rationales:
 - [ ] M5: ML/LLM & self-evolution (AI focus)
 - [ ] M6: Performance & self-hosting (stretch)
 - [ ] M7: Fun (stretch: audio, games)
-- [ ] M8: Graphics (TempleOS soul, GUI last)
+- [ ] M9: Services & task manager (NOC)
+- [ ] M10: NOClang TUI (the CLI — biggest part, home of the AI factors)
+- [ ] Future (unnumbered): Graphics (deferred; design in M8-GRAPHICS.md)
 
 ## Getting Started
 

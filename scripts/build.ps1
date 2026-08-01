@@ -1062,6 +1062,80 @@ function Invoke-Test {
             throw 'evict-under-pressure process did not complete'
         }
 
+        # ---- M5: fixed-point transformer training / eval ----
+        # TransReset deterministically re-randomizes the weights, TransTrain
+        # runs full fixed-point backprop over the tail of the interaction log
+        # and reports a loss, and TransEval reports in-corpus accuracy. After a
+        # reset, re-training on the same log must reproduce the identical loss
+        # (deterministic SGD), and TransPredict must still answer from the
+        # trained weights.
+        $baseTr = Get-Log
+        Send-Keys "TransReset;`n"
+        if (-not (Wait-Appended $baseTr 'trans: reset')) {
+            throw 'TransReset did not report the transformer reset'
+        }
+        Send-Keys "LogClear;`n"
+        if (-not (Wait-Appended $baseTr 'log: cleared')) {
+            throw 'LogClear did not clear the interaction log'
+        }
+        $baseF = Get-Log
+        foreach ($i in 1..8) {
+            Send-Keys "PrintLn(`"ABABABAB`");`n"
+            if (-not (Wait-Appended $baseF 'ABABABAB')) {
+                throw "trans corpus line #$i did not echo"
+            }
+            $baseF = Get-Log
+        }
+        $baseT = Get-Log
+        Send-Keys "TransTrain(`"harness`", 2);`n"
+        if (-not (Wait-Appended $baseT 'trans: train harness \(2 passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)' 30)) {
+            throw 'TransTrain did not run and report a loss'
+        }
+        $mLoss = [regex]::Match((Get-Log).Substring($baseT.Length),
+                                'loss=(\d+\.\d+) bits/byte')
+        if (-not $mLoss.Success) { throw 'could not capture the training loss' }
+        $loss1 = $mLoss.Groups[1].Value
+        $baseE2 = Get-Log
+        Send-Keys "TransEval;`n"
+        if (-not (Wait-Appended $baseE2 'trans: eval \d+ bytes, acc=\d+%, loss=\d+\.\d+ bits/byte' 30)) {
+            throw 'TransEval did not report accuracy'
+        }
+        # Determinism re-run: reset weights AND rebuild the exact same
+        # interaction-log tail (the training window), so the fixed-point SGD
+        # must reproduce the identical loss.
+        $baseD = Get-Log
+        Send-Keys "TransReset;`n"
+        if (-not (Wait-Appended $baseD 'trans: reset')) {
+            throw 'determinism TransReset did not report'
+        }
+        Send-Keys "LogClear;`n"
+        if (-not (Wait-Appended $baseD 'log: cleared')) {
+            throw 'determinism LogClear did not clear the interaction log'
+        }
+        $baseF2 = Get-Log
+        foreach ($i in 1..8) {
+            Send-Keys "PrintLn(`"ABABABAB`");`n"
+            if (-not (Wait-Appended $baseF2 'ABABABAB')) {
+                throw "determinism corpus line #$i did not echo"
+            }
+            $baseF2 = Get-Log
+        }
+        Send-Keys "TransTrain(`"harness`", 2);`n"
+        if (-not (Wait-Appended $baseD 'trans: train harness \(2 passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)' 30)) {
+            throw 'determinism TransTrain did not run'
+        }
+        $mLoss2 = [regex]::Match((Get-Log).Substring($baseD.Length),
+                                 'loss=(\d+\.\d+) bits/byte')
+        if (-not $mLoss2.Success) { throw 'could not capture the second loss' }
+        if ($mLoss2.Groups[1].Value -ne $loss1) {
+            throw "trans training was not deterministic: loss $loss1 vs $($mLoss2.Groups[1].Value)"
+        }
+        $baseP = Get-Log
+        Send-Keys "TransPredict(`"ABAB`");`n"
+        if (-not (Wait-Appended $baseP 'trans: pred \d+ bytes: ')) {
+            throw 'TransPredict did not answer after training'
+        }
+
         # Deliberate fault as the final check: #UD must trap, not triple-fault.
         Send-Keys "FaultTest`n"
         if (-not (Wait-LogPattern 'EXCEPTION: Invalid Opcode')) {
@@ -1070,7 +1144,7 @@ function Invoke-Test {
 
         $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
         Write-Host $content
-        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), bigram generation from the trained model, model-drafted NOC program spawned as a ring-3 user process with output reaching the shell, and fault trapping all verified'
+        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), bigram generation from the trained model, model-drafted NOC program spawned as a ring-3 user process with output reaching the shell, demand-paged read-only transformer weight pages (fault-in, write-trap, budget eviction/refault), deterministic fixed-point transformer training/eval (TransTrain/TransEval/TransReset), and fault trapping all verified'
         exit 0
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }

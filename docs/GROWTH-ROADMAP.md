@@ -104,6 +104,9 @@ Value Density = (Time Saved by Automation) / (RAM Used by Opportunistic Features
 | **M5** | Child → Teen | **model_budget(n) syscall = FORMAL ALLOCATION INTERFACE** |
 | **M6** | Teen → Adult | **JIT COMPILER = ENABLES LARGER MODELS IN SAME RAM** |
 | **M7+** | Adult | Domain specialization, RAG, NL→NOC |
+| **M9** | Teen | Services & task manager = managed CPU budgets for model/service coexistence |
+| **M10** | Teen → Adult | NOClang TUI = the CLI core where prediction/completion surface to the user |
+| **Future (unnumbered)** | Adult | Graphics/GUI — deferred; text surface (M10) completes first |
 
 **KEY INSIGHT**: You **cannot** reach Child stage (M5) without completing Infant stage (M3). The user-mode sandbox is non-negotiable for safe model execution. This is why we **must** get M3 rock-solid before adding "AI" features — it's not optional architecture, it's a **safety requirement**.
 

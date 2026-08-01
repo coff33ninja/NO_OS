@@ -200,6 +200,20 @@ The kernel append-logs to `/var/interact.log` (pre-allocated circular buffer):
 > `ModelBudget(4); ModelTouch(0); ModelTouch(1); ModelEvict(0); ModelTouch(1);`
 > exercises deny -> evict -> refault in one run.
 
+> **Status (slice 11):** the micro-transformer can now train. `TransTrain(<why>[, <passes>]);`
+> (`kernel/noc/trans.c:trans_train`) copies the tail of the interaction log
+> (up to 4 KiB, watermarking `il_len_bytes`) and runs full fixed-point SGD
+> backprop over the last `ctx+2` bytes: cross-entropy over two next-byte
+> targets (t+1 and t+2), per-layer layernorm / GELU / attention gradient
+> paths, and per-tensor normalized weight updates that map the max gradient
+> to a step of ~2 with |u|≤3 so int8 weights stay in range. `TransEval;`
+> reports in-corpus top-1 accuracy plus average loss; `TransReset;`
+> deterministically re-randomizes the weights (PRNG seed fixed) so a
+> reset + identical log reproduces the identical loss — harness-verified
+> (loss 8.09 bits/byte on both runs). Backprop buffers are lazily allocated
+> (`alloc_train`) and freed on reconfigure/reset; `working_kb` tracks the
+> real footprint.
+
 ### 4.3. Model Updates
 - New weights written to temporary file
 - On successful validation: atomic swap with current model file

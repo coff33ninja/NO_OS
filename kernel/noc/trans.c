@@ -22,7 +22,7 @@
      attention scores   int64 accum, Q8.8 via >>8, temperature >>3
      exp                Q12 table built at init (4096*(4080/4096)^k)
      log2               millibit table (same scheme as the bigram model)
-     inverse-root       (1<<24)/isqrt(var_raw) then >>16
+     inverse-root       (1<<24)/isqrt(var_raw) then >>8 (Q8.8)
 
    The blob is header(32) + weights; offsets are computed from the config,
    never hardcoded. trans_weights() is the only source of truth for the
@@ -45,13 +45,25 @@ static u32          last_loss_mbit;
 static usize        train_watermark;
 static char         batch[TRANS_BATCH];
 
-/* workspace (allocated lazily on first train, sized by cfg) */
-static i16 *h0, *logits, *dl, *fwd_lay, *bwd_lay, *scr, *gup;
-static i32 *wgrad;          /* weight gradient, weights_bytes/1 i32  */
-static i32 *embgrad;        /* VOCAB*D */
+/* forward workspace (allocated lazily by alloc_workspace, sized by cfg) */
+static i16 *h0, *logits, *dl, *fwd_lay, *scr, *gup;
+
+/* train-time buffers (allocated lazily by alloc_train):
+   lnout   L*2*C*D   per-layer LN1/LN2 outputs (forward, for backward)
+   gact    L*C*F     per-layer GELU outputs (forward)
+   yf      (L+1)*C*D per-layer attention output before FFN; slot L holds
+                     the final pre-LN input (the residual block h0[L] is
+                     overwritten by the final layernorm, so it is saved)
+   bwd_lay L*laybuf  per-layer backward buffers (dQ dK dV dScores dA)
+   dhy     (L+1)*C*D residual-stream gradients
+   dlogits C*V       logit gradients
+   accg    C*D       i64 accumulation scratch for the attention backward */
+static i16 *lnout, *gact, *yf, *bwd_lay, *dhy, *dlogits;
+static i64 *accg;
+static i64 *wgrad;          /* weight gradient, one i64 per weight byte */
+static i64 *embgrad;        /* VOCAB*D */
 static u8  *wblob;          /* header + weights                     */
 static usize wbytes;        /* blob size (header + weights)         */
-static usize wgrad_bytes;
 static void free_workspace(void);
 
 /* log2(n)*1000 for n>=1 (identical scheme to kernel/noc/train.c). */
@@ -169,13 +181,17 @@ static int clz32(u32 v)
     return n;
 }
 
-/* (1<<24)/sqrt(n) >> 16: Q8.8 reciprocal root, used by LayerNorm. */
+/* (1<<24)/isqrt(n) >> 8: Q8.8 reciprocal root, used by LayerNorm.
+   n is the raw variance (Q16.16: 65536*var_true). The result r satisfies
+   ((x-mean)*r) >> 8 == 256*(x-mean)_true/sqrt(var_true), i.e. the correctly
+   normalized value in Q8.8. (The old code returned sqrt(n) scaled -- LN
+   amplified instead of normalizing and saturated int16.) */
 static i32 rsqrt24(u32 n)
 {
     if (n < 1)
         n = 1;
-    int shift = (31 - clz32(n)) & ~1;
-    u32 m = n << (28 - shift);          /* 28-bit mantissa, even shift */
+    int shift = (31 - clz32(n)) & ~1;   /* even, so the sqrt stays integer */
+    u32 m = (shift <= 28) ? (n << (28 - shift)) : (n >> (shift - 28));
     u32 r = 0, bit = 1u << 14;
     while (bit) {
         u32 t = r + bit;
@@ -185,10 +201,16 @@ static i32 rsqrt24(u32 n)
         }
         bit >>= 1;
     }
-    return (i32)((u64)r * (1u << (18 - shift / 2)) >> 8);
+    /* r = isqrt(n) * 2^(14 - shift/2) */
+    int s = 14 - shift / 2;
+    u32 isr = (s >= 0) ? (r >> s) : (r << (-s));
+    if (isr < 1)
+        isr = 1;
+    return (i32)(((u64)1 << 24) / isr >> 8);
 }
 
-/* LayerNorm over len D (Q8.8 data). g/b are int8 Q4.4. */
+/* LayerNorm over len D (Q8.8 data). g/b are int8 Q4.4. r (Q8.8) is the
+   reciprocal root; the Q8.8*Q8.8 product is shifted back to Q8.8. */
 static void layernorm(i16 *x, usize D, const i8 *g, const i8 *b)
 {
     i64 sum = 0, sq = 0;
@@ -201,34 +223,51 @@ static void layernorm(i16 *x, usize D, const i8 *g, const i8 *b)
     i64 var = (sq / (i64)D) - mean * mean;
     i32 r = rsqrt24((u32)((var > 0) ? var : 1));
     for (usize i = 0; i < D; i++) {
-        i32 v = ((i32)x[i] - (i32)mean) * r;
+        i64 v = ((i64)x[i] - (i64)mean) * (i64)r;
+        v >>= 8;
         i32 gg = (i32)(i8)g[i];
         i32 bb = (i32)(i8)b[i];
-        v = (v * gg) >> 4;              /* gain Q4.4 */
-        v += (bb << 8);                 /* bias Q4.4 -> Q8.8 */
+        v = (v * (i64)gg) >> 4;         /* gain Q4.4 */
+        v += ((i64)bb << 4);            /* bias Q4.4 -> Q8.8 */
         if (v > 32767) v = 32767;
         if (v < -32768) v = -32768;
         x[i] = (i16)v;
     }
 }
 
-/* GELU(x)*256 in Q12, x in Q8.8, via x*sigmoid(1.702x). */
+/* GELU(x)*4096 in Q12, x in Q8.8, via x*sigmoid(1.702x); gelu_dtab holds
+   GELU'(x)*4096 (Q12) for the backprop pass. sigmoid is evaluated with the
+   |argument| index into expm_tab (e^(-k/256)) so the sign is handled
+   exactly: z >= 0 -> 1/(1+e^-z), z < 0 -> e^z/(1+e^z). */
+#define GELU_WQ 6971 /* 1.702 in Q12 (6971/4096) */
+
 static u32 gelu_tab[4097];
+static u16 gelu_dtab[4097];
 
 static void gelu_init(void)
 {
     for (int k = 0; k <= 4096; k++) {
-        i64 x = (i64)(k - 2048);        /* Q8.8 raw */
-        i64 sx = x * 4356 / 4096;       /* 1.702*x */
-        i64 idx = sx / 256 + 1024;      /* exp-table index in [0,2048] */
-        if (idx < 0) idx = 0;
-        if (idx > 2048) idx = 2048;
-        i64 e = expm_tab[(u32)idx];     /* e^(-sx/256)*4096 (Q12) */
-        i64 sig = (e * 4096) / (e + 4096); /* sigmoid(sx) Q12 */
-        i64 g = (x * sig) >> 4;         /* x*Q8.8 * sig Q12 -> Q12 */
+        i64 x = (i64)(k - 2048);        /* Q8.8 raw, [-2048,2048] */
+        i64 sx = x * GELU_WQ / 4096;    /* 1.702*x, Q8.8 */
+        i64 az = (sx < 0) ? -sx : sx;   /* |1.702*x| */
+        if (az > 2048) az = 2048;       /* e^-8 is negligible beyond */
+        i64 e = expm_tab[(u32)az];      /* 4096*e^(-az/256), Q12 */
+        i64 sig;                        /* sigmoid(1.702x), Q12 */
+        if (sx >= 0)
+            sig = (4096 * 4096) / (e + 4096);  /* 1/(1+e^-z) */
+        else
+            sig = (4096 * e) / (e + 4096);     /* e^z/(1+e^z) */
+        i64 g = (x * sig) >> 8;         /* x Q8.8 * sig Q12 -> Q12 */
         if (g < 0) g = 0;
         if (g > 65535) g = 65535;
         gelu_tab[k] = (u32)g;
+
+        i64 om = 4096 - sig;            /* 1 - sigmoid, Q12 */
+        i64 term = (sx * om) / (256 * 4096); /* 1.702x*(1-sigmoid) */
+        i64 d = sig + (sig * term);     /* gelu' = sig*(1+...) Q12 */
+        if (d < 0) d = 0;
+        if (d > 65535) d = 65535;
+        gelu_dtab[k] = (u16)d;
     }
 }
 
@@ -285,6 +324,11 @@ static i16 *trans_forward(const u8 *toks, usize C, i16 *logits)
             scr[t] = h[t];
         for (usize t = 0; t < C; t++)
             layernorm(scr + t * D, D, g1, b1);
+        if (lnout) {
+            i16 *dst = lnout + l * (2 * C * D);
+            for (usize t = 0; t < C * D; t++)
+                dst[t] = scr[t];
+        }
 
         for (usize t = 0; t < C; t++) {
             const i16 *xin = scr + t * D;
@@ -367,11 +411,23 @@ static i16 *trans_forward(const u8 *toks, usize C, i16 *logits)
             }
         }
 
+        /* stash the attention output before the FFN (input to LN2) */
+        if (yf) {
+            i16 *dst = yf + l * (C * D);
+            for (usize t = 0; t < C * D; t++)
+                dst[t] = h1[t];
+        }
+
         /* FFN sub-block: h1 <- h1 + Wd*GELU(Wu*LN2(h1)) */
         for (usize t = 0; t < C * D; t++)
             scr[t] = h1[t];
         for (usize t = 0; t < C; t++)
             layernorm(scr + t * D, D, g2, b2);
+        if (lnout) {
+            i16 *dst = lnout + l * (2 * C * D) + C * D;
+            for (usize t = 0; t < C * D; t++)
+                dst[t] = scr[t];
+        }
         for (usize t = 0; t < C; t++) {
             i16 *s = scr + t * D;
             for (usize j = 0; j < F; j++) {
@@ -382,6 +438,11 @@ static i16 *trans_forward(const u8 *toks, usize C, i16 *logits)
                 if (a > 2047) a = 2047;
                 if (a < -2048) a = -2048;
                 gup[j] = (i16)((i32)gelu_tab[a + 2048] >> 4); /* Q8.8 */
+            }
+            if (gact) {
+                i16 *dst = gact + l * (C * F) + t * F;
+                for (usize j = 0; j < F; j++)
+                    dst[j] = gup[j];
             }
             for (usize j = 0; j < D; j++) {
                 i32 a = 0;
@@ -395,10 +456,15 @@ static i16 *trans_forward(const u8 *toks, usize C, i16 *logits)
         }
     }
 
-    /* final LN + output head. h0 block L is spare scratch (L+1 blocks). */
+    /* final LN + output head. The residual stream after the last layer is
+       h0 block L (layer L-1 wrote its output there as h1). The pre-LN input
+       is saved into yf slot L because the in-place layernorm overwrites it. */
     i16 *fin = h0 + L * (C * D);
-    for (usize t = 0; t < C * D; t++)
-        fin[t] = h0[(L - 1) * (C * D) + t];
+    if (yf) {
+        i16 *dst = yf + L * (C * D);
+        for (usize t = 0; t < C * D; t++)
+            dst[t] = fin[t];
+    }
     for (usize t = 0; t < C; t++)
         layernorm(fin + t * D, D, (const i8 *)wblob + o_finln_g(),
                   (const i8 *)wblob + o_finln_b());
@@ -421,7 +487,7 @@ static i16 *trans_forward(const u8 *toks, usize C, i16 *logits)
 static bool alloc_workspace(void)
 {
     usize C = cfg.ctx, D = cfg.d_model, L = cfg.n_layers, F = cfg.d_ff;
-    usize need_h0  = (L + 1) * C * D;   /* L layer residuals + fin scratch */
+    usize need_h0  = (L + 1) * C * D;   /* residual stream + final block */
     usize need_lay = L * laybuf_words(&cfg);
     usize need_log = C * TRANS_VOCAB;
     usize need_scr = C * D;
@@ -447,6 +513,45 @@ static bool alloc_workspace(void)
     if (!gup) {
         gup = p; p += need_gup;
     }
+    return true;
+}
+
+/* Train-time buffers (activations stashed by trans_forward + backward
+   gradients). Lazily allocated on the first trans_train; freed on
+   reconfigure/reset. Returns false if the heap cannot take them. */
+static bool alloc_train(void)
+{
+    usize C = cfg.ctx, D = cfg.d_model, L = cfg.n_layers, F = cfg.d_ff;
+    usize need_ln  = L * 2 * C * D;
+    usize need_ga  = L * C * F;
+    usize need_yf  = (L + 1) * C * D;
+    usize need_bwd = L * laybuf_words(&cfg);
+    usize need_dhy = (L + 1) * C * D;
+    usize need_dl  = C * TRANS_VOCAB;
+    usize need_wg  = weights_bytes_of(&cfg) - TRANS_HDR;
+    usize need_eg  = TRANS_VOCAB * D;
+    usize need_ac  = C * D;
+    if (lnout && gact && yf && bwd_lay && dhy && dlogits && accg &&
+        wgrad && embgrad)
+        return true;
+    usize sz = need_ln + need_ga + need_yf + need_bwd + need_dhy + need_dl;
+    i16 *p = (i16 *)kmalloc(sz * sizeof(i16));
+    if (!p)
+        return false;
+    i64 *g = (i64 *)kmalloc((need_wg + need_eg + need_ac) * sizeof(i64));
+    if (!g) {
+        kfree(p);
+        return false;
+    }
+    if (!lnout)   { lnout = p;    p += need_ln; }
+    if (!gact)    { gact = p;     p += need_ga; }
+    if (!yf)      { yf = p;       p += need_yf; }
+    if (!bwd_lay) { bwd_lay = p;  p += need_bwd; }
+    if (!dhy)     { dhy = p;      p += need_dhy; }
+    if (!dlogits) { dlogits = p;  p += need_dl; }
+    if (!wgrad)   { wgrad = g;    g += need_wg; }
+    if (!embgrad) { embgrad = g;  g += need_eg; }
+    if (!accg)    { accg = g; }
     return true;
 }
 
@@ -508,6 +613,481 @@ usize trans_generate(char *out, usize cap, const char *seed, usize seedlen)
     return outlen;
 }
 
+/* ------------------------------------------------------------------ */
+/* backprop training                                                   */
+/* ------------------------------------------------------------------ */
+
+static inline i32 clip16(i64 v)
+{
+    if (v > 32767) v = 32767;
+    if (v < -32768) v = -32768;
+    return (i32)v;
+}
+
+/* Softmax over the vocab of one logits row into p (V i16, Q12), the same
+   max-subtract / expm_tab scheme as the attention softmax. */
+static void softmax_v(const i16 *row, i16 *p)
+{
+    i32 mx = -32768;
+    for (u32 j = 0; j < TRANS_VOCAB; j++)
+        if (row[j] > mx)
+            mx = row[j];
+    u32 esum = 0;
+    for (u32 j = 0; j < TRANS_VOCAB; j++) {
+        i32 s = row[j] - mx;
+        u32 e;
+        if (s <= -2048)
+            e = 0;
+        else if (s >= 0)
+            e = 4096;
+        else
+            e = expm_tab[(u32)(-s)];
+        p[j] = (i16)e;
+        esum += e;
+    }
+    if (esum < 1)
+        esum = 1;
+    for (u32 j = 0; j < TRANS_VOCAB; j++)
+        p[j] = (i16)(((u32)p[j] << 12) / esum);
+}
+
+/* LayerNorm backward for one token row x[0..D): xo holds the gradient with
+   respect to the LN output on entry and receives the gradient with respect
+   to x (clamped to i16) on exit. Recomputes mean/var/r and the per-element
+   normalized value n, applying the mean/variance correction. dg/db (i64)
+   accumulate the gain/bias gradients across tokens. The bias does not feed
+   back into x, so it is not read here. */
+static void ln_bwd(const i16 *x, i16 *xo, usize D, const i8 *g,
+                   i64 *dg, i64 *db)
+{
+    i64 sum = 0, sq = 0;
+    for (usize i = 0; i < D; i++) {
+        i32 v = x[i];
+        sum += v;
+        sq += (i64)v * v;
+    }
+    i64 mean = sum / (i64)D;
+    i64 var = (sq / (i64)D) - mean * mean;
+    i32 r = rsqrt24((u32)((var > 0) ? var : 1));
+    i64 sdn = 0, snn = 0;
+    for (usize i = 0; i < D; i++) {
+        i64 n = (((i64)x[i] - mean) * (i64)r) >> 8;
+        i64 dn = ((i64)xo[i] * (i64)(i8)g[i]) >> 4;
+        sdn += dn;
+        snn += n * dn;
+    }
+    i64 sd = sdn / (i64)D;
+    i64 sn = snn / ((i64)D * 65536);
+    for (usize i = 0; i < D; i++) {
+        i64 n = (((i64)x[i] - mean) * (i64)r) >> 8;
+        i64 dout = xo[i];
+        i64 dn = (dout * (i64)(i8)g[i]) >> 4;
+        i64 dx = ((i64)r * (dn - sd - n * sn)) >> 12;
+        xo[i] = (i16)clip16(dx);
+        dg[i] += (dout * n) >> 4;   /* dL/dgamma */
+        db[i] += dout << 4;         /* dL/dbeta  (Q4.4 -> Q8.8) */
+    }
+}
+
+/* Normalized gradient update for one weight tensor: shift the (i64)
+   gradients so the largest magnitude maps to a step of ~2 int8 units, then
+   apply w -= step with saturation. Normalizing per tensor keeps every path
+   (head, embedding, each matrix / LN parameter) learning at a comparable
+   rate regardless of the fixed-point gradient scales. */
+static void upd_blob(i8 *w, const i64 *g, usize count)
+{
+    i64 m = 1;
+    for (usize i = 0; i < count; i++) {
+        i64 a = g[i];
+        if (a < 0) a = -a;
+        if (a > m) m = a;
+    }
+    int sh = 0;
+    while (m > 2) {
+        m >>= 1;
+        sh++;
+    }
+    for (usize i = 0; i < count; i++) {
+        i64 u = g[i] >> sh;
+        if (u > 3) u = 3;
+        if (u < -3) u = -3;
+        i32 v = (i32)w[i] - (i32)u;
+        if (v > 127) v = 127;
+        if (v < -128) v = -128;
+        w[i] = (i8)v;
+    }
+}
+
+/* One full SGD step: forward (stashing activations), cross-entropy loss and
+   logit gradients for the t+1 and t+2 targets, then full backprop through
+   the head, final LN, every layer (attention + FFN + the two LNs) and the
+   embedding, and finally the normalized per-tensor weight updates. */
+static void train_pass(const u8 *toks, usize C)
+{
+    usize D = cfg.d_model, F = cfg.d_ff, H = cfg.n_heads, L = cfg.n_layers;
+    usize V = TRANS_VOCAB, dh = D / H;
+    const usize per = laybuf_words(&cfg);
+
+    /* zero the gradient accumulators */
+    usize nwg = wbytes - TRANS_HDR;
+    for (usize i = 0; i < nwg; i++)
+        wgrad[i] = 0;
+    for (usize i = 0; i < V * D; i++)
+        embgrad[i] = 0;
+    for (usize i = 0; i < C * V; i++)
+        dlogits[i] = 0;
+
+    /* forward (stashes lnout/gact/yf and the final pre-LN input) */
+    trans_forward(toks, C, logits);
+
+    /* ---- cross-entropy loss + logit gradients (targets t+1, t+2) ---- */
+    u64 bits = 0;
+    usize ntargets = 0;
+    for (usize t = 0; t < C; t++) {
+        const i16 *row = logits + t * V;
+        i16 *p = scr;
+        softmax_v(row, p);
+        for (u32 ti = 1; ti <= 2; ti++) {
+            u32 tgt = toks[t + ti];
+            i32 pr = p[tgt];
+            bits += (pr >= 1) ? (u64)(12000 - log2_mbit((u32)pr)) : 16000;
+            ntargets++;
+            for (u32 b = 0; b < V; b++) {
+                i32 d = ((i32)p[b] - ((b == tgt) ? 4096 : 0)) >> 2;
+                i32 cur = (i32)dlogits[t * V + b] + d;
+                if (cur > 4096) cur = 4096;
+                if (cur < -4096) cur = -4096;
+                dlogits[t * V + b] = (i16)cur;
+            }
+        }
+    }
+    if (ntargets)
+        last_loss_mbit = (u32)(bits / (u64)ntargets);
+
+    /* ---- output head + final LN backward ---- */
+    i16 *fin = h0 + L * C * D;             /* post-LN final block */
+    const i8 *head = (const i8 *)wblob + o_head();
+    i64 *gh = wgrad + (o_head() - TRANS_HDR);
+    i16 *dhyL = dhy + L * C * D;
+    for (usize t = 0; t < C; t++) {
+        for (usize k = 0; k < D; k++) {
+            i64 acc = 0;
+            for (u32 j = 0; j < V; j++)
+                acc += (i64)head[k * V + j] * (i64)dlogits[t * V + j];
+            dhyL[t * D + k] = (i16)clip16(acc >> 8);
+        }
+    }
+    for (usize t = 0; t < C; t++)
+        for (usize k = 0; k < D; k++) {
+            i64 fk = fin[t * D + k];
+            if (fk)
+                for (u32 j = 0; j < V; j++)
+                    gh[k * V + j] += (i64)dlogits[t * V + j] * fk;
+        }
+    ln_bwd((const i16 *)yf + L * C * D, dhyL, D,
+           (const i8 *)wblob + o_finln_g(),
+           wgrad + (o_finln_g() - TRANS_HDR),
+           wgrad + (o_finln_b() - TRANS_HDR));
+
+    /* ---- per-layer backward ---- */
+    for (int ll = (int)L - 1; ll >= 0; ll--) {
+        usize l = (usize)ll;
+        usize lo = lay_off(&cfg, l);
+        const i8 *wq = (const i8 *)wblob + lo + O_WQ;
+        const i8 *wk = (const i8 *)wblob + lo + O_WK;
+        const i8 *wv = (const i8 *)wblob + lo + O_WV;
+        const i8 *wo = (const i8 *)wblob + lo + O_WO;
+        const i8 *g1 = (const i8 *)wblob + lo + O_LN1G;
+        const i8 *g2 = (const i8 *)wblob + lo + O_LN2G;
+        const i8 *wu = (const i8 *)wblob + lo + O_WUP;
+        const i8 *wd = (const i8 *)wblob + lo + O_WDN;
+        i64 *wlo = wgrad + (lo - TRANS_HDR);
+        i64 *gwq = wlo + O_WQ, *gwk = wlo + O_WK, *gwv = wlo + O_WV;
+        i64 *gwo = wlo + O_WO;
+        i64 *gg1 = wlo + O_LN1G, *gb1 = wlo + O_LN1B;
+        i64 *gg2 = wlo + O_LN2G, *gb2 = wlo + O_LN2B;
+        i64 *gwu = wlo + O_WUP, *gwd = wlo + O_WDN;
+
+        i16 *lay = fwd_lay + l * per;
+        i16 *Q = lay, *K = lay + C * D, *Vb = lay + C * D * 2;
+        i16 *S = Vb + C * D, *A = S + H * C * C;
+        i16 *bw  = bwd_lay + l * per;
+        i16 *dQb = bw, *dKb = bw + C * D, *dVb = bw + C * D * 2;
+        i16 *dSc = bw + C * D * 3;
+        i16 *dA  = dSc + H * C * C;
+        i16 *dout = dhy + (l + 1) * C * D;  /* grad wrt layer output */
+        i16 *dln  = dhy + l * C * D;        /* scratch: LN1/LN2 grads */
+        const i16 *ln1 = lnout + l * 2 * C * D;
+        const i16 *ln2 = ln1 + C * D;
+        i16 *gac = gact + l * C * F;
+        const i16 *yarr = yf + l * C * D;
+        const i16 *hin = h0 + l * C * D;
+
+        /* ---- FFN: d_Wd, d_pre_g, d_Wu, LN2 ---- */
+        for (usize t = 0; t < C; t++)
+            for (usize k = 0; k < F; k++) {
+                i64 gk = gac[t * F + k];
+                if (gk)
+                    for (usize j = 0; j < D; j++)
+                        gwd[k * D + j] += gk * (i64)dout[t * D + j];
+            }
+        for (usize t = 0; t < C; t++) {
+            for (usize j = 0; j < F; j++) {
+                i64 acc = 0;
+                for (usize k = 0; k < D; k++)
+                    acc += (i64)wd[k * D + j] * (i64)dout[t * D + k];
+                i64 pre = 0;
+                for (usize k = 0; k < D; k++)
+                    pre += (i64)wu[k * F + j] * (i64)ln2[t * D + k];
+                i32 pidx = (i32)(pre >> 8);
+                if (pidx > 2047) pidx = 2047;
+                if (pidx < -2048) pidx = -2048;
+                gac[t * F + j] = (i16)clip16((acc * (i64)gelu_dtab[pidx + 2048]) >> 12);
+            }
+        }
+        for (usize t = 0; t < C; t++)
+            for (usize k = 0; k < D; k++) {
+                i64 acc = 0;
+                for (usize j = 0; j < F; j++)
+                    acc += (i64)gac[t * F + j] * (i64)wu[k * F + j];
+                dln[t * D + k] = (i16)clip16(acc >> 8);
+            }
+        for (usize t = 0; t < C; t++)
+            for (usize k = 0; k < D; k++) {
+                i64 lk = ln2[t * D + k];
+                if (lk)
+                    for (usize j = 0; j < F; j++)
+                        gwu[k * F + j] += (i64)gac[t * F + j] * lk;
+            }
+        ln_bwd(yarr, dln, D, g2, gg2, gb2);
+        for (usize t = 0; t < C * D; t++) {
+            i64 v = (i64)dout[t] + (i64)dln[t];
+            dout[t] = (i16)clip16(v);   /* residual + LN2 path */
+        }
+
+        /* ---- attention: dA, d_WO, dP, dScores, dQ/dK/dV ---- */
+        for (usize t = 0; t < C; t++)
+            for (usize k = 0; k < D; k++) {
+                i64 acc = 0;
+                for (usize j = 0; j < D; j++)
+                    acc += (i64)wo[k * D + j] * (i64)dout[t * D + j];
+                dA[t * D + k] = (i16)clip16(acc >> 8);
+            }
+        for (usize t = 0; t < C; t++)
+            for (usize k = 0; k < D; k++) {
+                i64 ak = A[t * D + k];
+                if (ak)
+                    for (usize j = 0; j < D; j++)
+                        gwo[k * D + j] += ak * (i64)dout[t * D + j];
+            }
+        for (usize hd = 0; hd < H; hd++) {
+            usize hs = hd * C * C;
+            for (usize i = 0; i < C; i++) {
+                i64 dpsum = 0;
+                for (usize j = 0; j <= i; j++) {
+                    i64 acc = 0;
+                    for (usize o = 0; o < dh; o++)
+                        acc += (i64)dA[i * D + hd * dh + o] *
+                               (i64)Vb[j * D + hd * dh + o];
+                    scr[j] = (i16)clip16(acc >> 12);
+                    dpsum += (i64)scr[j] * (i64)S[hs + i * C + j];
+                }
+                dpsum >>= 12;   /* (Σ P·dP) / 4096 */
+                for (usize j = 0; j <= i; j++) {
+                    i64 ds = (i64)S[hs + i * C + j] * ((i64)scr[j] - dpsum);
+                    dSc[hs + i * C + j] = (i16)clip16(ds);
+                }
+            }
+        }
+        for (usize t = 0; t < C * D; t++)
+            accg[t] = 0;
+        for (usize hd = 0; hd < H; hd++) {
+            usize hs = hd * C * C;
+            for (usize i = 0; i < C; i++)
+                for (usize j = 0; j <= i; j++) {
+                    i32 ds = dSc[hs + i * C + j];
+                    if (ds)
+                        for (usize o = 0; o < dh; o++) {
+                            usize qi = i * D + hd * dh + o;
+                            usize kj = j * D + hd * dh + o;
+                            accg[qi] += (i64)ds * (i64)K[kj];
+                            accg[kj] += (i64)ds * (i64)Q[qi];
+                        }
+                }
+        }
+        for (usize t = 0; t < C * D; t++)
+            dQb[t] = (i16)clip16(accg[t] >> 11);
+        for (usize t = 0; t < C * D; t++)
+            accg[t] = 0;
+        for (usize hd = 0; hd < H; hd++) {
+            usize hs = hd * C * C;
+            for (usize i = 0; i < C; i++)
+                for (usize j = 0; j <= i; j++) {
+                    i32 pij = S[hs + i * C + j];
+                    if (pij)
+                        for (usize o = 0; o < dh; o++)
+                            accg[j * D + hd * dh + o] +=
+                                (i64)pij * (i64)dA[i * D + hd * dh + o];
+                }
+        }
+        for (usize t = 0; t < C * D; t++)
+            dVb[t] = (i16)clip16(accg[t] >> 12);
+
+        /* ---- project Q/K/V back through Wq/Wk/Wv, LN1 ---- */
+        for (usize t = 0; t < C; t++)
+            for (usize k = 0; k < D; k++) {
+                i64 acc = 0;
+                for (usize j = 0; j < D; j++)
+                    acc += (i64)wq[k * D + j] * (i64)dQb[t * D + j] +
+                           (i64)wk[k * D + j] * (i64)dKb[t * D + j] +
+                           (i64)wv[k * D + j] * (i64)dVb[t * D + j];
+                dln[t * D + k] = (i16)clip16(acc >> 8);
+            }
+        for (usize t = 0; t < C; t++)
+            for (usize k = 0; k < D; k++) {
+                i64 lk = ln1[t * D + k];
+                if (lk)
+                    for (usize j = 0; j < D; j++) {
+                        i64 dq = dQb[t * D + j], dk = dKb[t * D + j],
+                            dv = dVb[t * D + j];
+                        gwq[k * D + j] += dq * lk;
+                        gwk[k * D + j] += dk * lk;
+                        gwv[k * D + j] += dv * lk;
+                    }
+            }
+        ln_bwd(hin, dln, D, g1, gg1, gb1);
+        for (usize t = 0; t < C * D; t++) {
+            i64 v = (i64)dout[t] + (i64)dln[t];
+            dln[t] = (i16)clip16(v);    /* dhy[l] = residual + LN1 path */
+        }
+    }
+
+    /* ---- embedding backward ---- */
+    for (usize t = 0; t < C; t++) {
+        u32 tok = toks[t];
+        i64 *eg = embgrad + (usize)tok * D;
+        const i16 *d0 = dhy + t * D;
+        for (usize j = 0; j < D; j++)
+            eg[j] += (i64)d0[j] << 4;   /* emb Q4.4 -> Q8.8 (x16) */
+    }
+
+    /* ---- per-tensor normalized weight updates ---- */
+    upd_blob((i8 *)wblob + TRANS_HDR, embgrad, V * D);
+    upd_blob((i8 *)wblob + o_head(), wgrad + (o_head() - TRANS_HDR), V * D);
+    for (usize l = 0; l < L; l++) {
+        usize lo = lay_off(&cfg, l);
+        i64 *wlo = wgrad + (lo - TRANS_HDR);
+        i8 *wb = (i8 *)wblob + lo;
+        upd_blob(wb + O_WQ, wlo + O_WQ, D * D);
+        upd_blob(wb + O_WK, wlo + O_WK, D * D);
+        upd_blob(wb + O_WV, wlo + O_WV, D * D);
+        upd_blob(wb + O_WO, wlo + O_WO, D * D);
+        upd_blob(wb + O_LN1G, wlo + O_LN1G, D);
+        upd_blob(wb + O_LN1B, wlo + O_LN1B, D);
+        upd_blob(wb + O_WUP, wlo + O_WUP, D * F);
+        upd_blob(wb + O_WDN, wlo + O_WDN, F * D);
+        upd_blob(wb + O_LN2G, wlo + O_LN2G, D);
+        upd_blob(wb + O_LN2B, wlo + O_LN2B, D);
+    }
+    upd_blob((i8 *)wblob + o_finln_g(), wgrad + (o_finln_g() - TRANS_HDR), D);
+    upd_blob((i8 *)wblob + o_finln_b(), wgrad + (o_finln_b() - TRANS_HDR), D);
+}
+
+/* One SGD training pass over the tail of the interaction log (cross-entropy,
+   full fixed-point backprop). Reports loss like the bigram and returns the
+   number of bytes trained (0 = nothing to do). */
+u32 trans_train(const char *why, usize max_bytes, usize max_passes)
+{
+    usize cap = (max_bytes && max_bytes < TRANS_BATCH) ? max_bytes
+                                                       : TRANS_BATCH;
+    usize nb = il_copy_tail(batch, cap);
+    train_watermark = il_len_bytes();
+    if (nb < TRANS_MIN)
+        return 0;
+    if (!alloc_workspace())
+        return 0;
+    if (!alloc_train())
+        return 0;
+    usize C = cfg.ctx;
+    if (C > nb - 2)
+        C = nb - 2;
+    if (C < 1)
+        return 0;
+    const u8 *toks = (const u8 *)batch + (nb - (C + 2));
+    usize passes = max_passes ? max_passes : 1;
+    if (passes > 4)
+        passes = 4;
+
+    for (usize p = 0; p < passes; p++)
+        train_pass(toks, C);
+
+    train_passes += passes;
+    train_bytes += (u32)nb;
+
+    char buf[96];
+    sprintk(buf, sizeof(buf),
+            "trans: train %s (%u passes, %u bytes, loss=%u.%u%u bits/byte)\n",
+            why, (unsigned)passes, (unsigned)nb,
+            (unsigned)(last_loss_mbit / 1000),
+            (unsigned)((last_loss_mbit % 1000) / 100),
+            (unsigned)(((last_loss_mbit % 1000) / 10) % 10));
+    noc_os_puts(buf);
+    return (u32)nb;
+}
+
+/* Report in-corpus top-1 next-byte accuracy (percent) plus average loss. */
+u32 trans_eval(void)
+{
+    if (!alloc_workspace())
+        return 0;
+    usize nb = il_copy_tail(batch, TRANS_BATCH);
+    if (nb < 2)
+        return 0;
+    usize C = cfg.ctx;
+    if (C > nb - 2)
+        C = nb - 2;
+    const u8 *toks = (const u8 *)batch + (nb - (C + 2));
+    trans_forward(toks, C, logits);
+
+    u64 bits = 0;
+    usize correct = 0, ntot = 0;
+    for (usize t = 0; t < C; t++) {
+        const i16 *row = logits + t * TRANS_VOCAB;
+        i16 *p = scr;
+        softmax_v(row, p);
+        i32 best = -32768;
+        u32 arg = 0;
+        for (u32 b = 0; b < TRANS_VOCAB; b++) {
+            if (row[b] > best) {
+                best = row[b];
+                arg = b;
+            }
+        }
+        for (u32 ti = 1; ti <= 2; ti++) {
+            u32 tgt = toks[t + ti];
+            i32 pr = p[tgt];
+            bits += (pr >= 1) ? (u64)(12000 - log2_mbit((u32)pr)) : 16000;
+            if (arg == tgt)
+                correct++;
+            ntot++;
+        }
+    }
+    if (!ntot)
+        return 0;
+    last_loss_mbit = (u32)(bits / (u64)ntot);
+    u32 acc = (u32)(correct * 100 / ntot);
+
+    char buf[96];
+    sprintk(buf, sizeof(buf),
+            "trans: eval %u bytes, acc=%u%%, loss=%u.%u%u bits/byte\n",
+            (unsigned)nb, (unsigned)acc,
+            (unsigned)(last_loss_mbit / 1000),
+            (unsigned)((last_loss_mbit % 1000) / 100),
+            (unsigned)(((last_loss_mbit % 1000) / 10) % 10));
+    noc_os_puts(buf);
+    return acc;
+}
+
 
 
 /* ------------------------------------------------------------------ */
@@ -523,19 +1103,25 @@ static void free_workspace(void)
     if (logits)  { kfree(logits);  logits = NULL; }
     if (dl)      { kfree(dl);      dl = NULL; }
     if (fwd_lay) { kfree(fwd_lay); fwd_lay = NULL; }
-    if (bwd_lay) { kfree(bwd_lay); bwd_lay = NULL; }
     if (scr)     { kfree(scr);     scr = NULL; }
     if (gup)     { kfree(gup);     gup = NULL; }
+    if (lnout)   { kfree(lnout);   lnout = NULL; }
+    if (gact)    { kfree(gact);    gact = NULL; }
+    if (yf)      { kfree(yf);      yf = NULL; }
+    if (bwd_lay) { kfree(bwd_lay); bwd_lay = NULL; }
+    if (dhy)     { kfree(dhy);     dhy = NULL; }
+    if (dlogits) { kfree(dlogits); dlogits = NULL; }
+    if (accg)    { kfree(accg);    accg = NULL; }
     if (embgrad) { kfree(embgrad); embgrad = NULL; }
     if (wgrad)   { kfree(wgrad);   wgrad = NULL; }
-    wgrad_bytes = 0;
 }
 
 /* Training working set in KB for a given config: forward activations
-   (h0 + per-layer Q/K/V/S/A + logits + LN scratch + FFN gup), the same
-   again for the backprop buffers, weight/embedding gradients, and the
-   weight blob. Mirrors what alloc_workspace + the train pass allocate so
-   graceful degradation tracks the true footprint. */
+   (h0 + per-layer Q/K/V/S/A + logits + LN scratch + FFN gup), the activations
+   stashed for backprop (lnout/gact/yf), the backward buffers (bwd_lay/dhy/
+   dlogits), the i64 weight/embedding gradients, and the weight blob.
+   Mirrors what alloc_workspace + alloc_train actually allocate so graceful
+   degradation tracks the true footprint. */
 static u32 working_kb(const trans_cfg_t *c)
 {
     u64 C = c->ctx, D = c->d_model, F = c->d_ff, L = c->n_layers, V = c->vocab;
@@ -545,13 +1131,17 @@ static u32 working_kb(const trans_cfg_t *c)
             + C * V               /* logits */
             + C * D               /* LN scratch */
             + F;                  /* FFN gup */
-    u64 bwd = L * laybuf          /* per-layer backward buffers */
-            + C * V               /* dlogits */
-            + C * D;              /* dl */
-    u64 bytes = (fwd + bwd) * 2   /* i16 */
-              + 4 * (u64)weights_bytes_of(c)  /* weight grads (int32) */
-              + 4 * V * D         /* embedding grads (int32) */
-              + (u64)weights_bytes_of(c);     /* the weight blob itself */
+    u64 xtra = L * 2 * C * D      /* lnout */
+             + L * C * F          /* gact */
+             + (L + 1) * C * D;   /* yf */
+    u64 bwd = L * laybuf          /* bwd_lay */
+            + (L + 1) * C * D     /* dhy */
+            + C * V;              /* dlogits */
+    u64 bytes = (fwd + xtra + bwd) * 2               /* i16 buffers */
+              + 8 * ((u64)weights_bytes_of(c) - TRANS_HDR) /* wgrad i64 */
+              + 8 * V * D                              /* embgrad i64 */
+              + 8 * C * D                              /* accg i64 */
+              + (u64)weights_bytes_of(c);              /* the weight blob */
     return (u32)((bytes + 1023) / 1024);
 }
 
