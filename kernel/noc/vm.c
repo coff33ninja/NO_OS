@@ -7,6 +7,7 @@
 #include "sched.h"
 #include "pmm.h"
 #include "heap.h"
+#include "fs.h"
 #endif
 
 #define NOC_STACK_SIZE 4096
@@ -71,6 +72,12 @@ noc_fn *noc_register_builtin(const char *name, u32 ret_type, u32 nargs,
     f->nargs = nargs;
     f->variadic = variadic;
     f->builtin = builtin_index;
+    {
+        char dbg[128];
+        sprintk(dbg, sizeof(dbg), "DBG: builtin '%s' struct=%p name=%p\n",
+                name, f, (void *)nm);
+        noc_os_puts(dbg);
+    }
     return noc_register_user_fn(f);
 }
 
@@ -665,7 +672,8 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
     (void)n;
     noc_os_puts("commands: Help, Version, MemInfo, Echo, FaultTest, Reboot, "
                 "Print, PrintLn, Sleep, Time, KeyGet, KeyPressed, Alloc, Free, "
-                "MemSet, MemCpy, Len, Spawn, Ps, Demo\n");
+                "MemSet, MemCpy, Len, Spawn, Ps, Demo, SaveFile, ReadFile, "
+                "DeleteFile, ListDir, StatFile, FormatDisk\n");
     *ret = 0;
     return true;
 }
@@ -788,6 +796,139 @@ static bool b_Demo(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_SaveFile(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)ret;
+    if (n < 2)
+        return false;
+    const char *name = (const char *)args[0];
+    const char *data = (const char *)args[1];
+    int ino = fs_lookup(name);
+    if (ino >= 0) {
+        if (fs_unlink(name) != 0) {
+            noc_os_puts("fs: unlink failed\n");
+            return true;
+        }
+    }
+    ino = fs_create(name, FS_INODE_REG);
+    if (ino < 0) {
+        noc_os_puts("fs: create failed\n");
+        *ret = (u64)-1;
+        return true;
+    }
+    if (fs_write_file((u32)ino, data, strlen(data)) != 0) {
+        noc_os_puts("fs: write failed\n");
+        *ret = (u64)-1;
+        return true;
+    }
+    fs_sync_bitmap();
+    char buf[64];
+    sprintk(buf, sizeof(buf), "fs: saved %s (%u bytes)\n", name,
+            (unsigned)strlen(data));
+    noc_os_puts(buf);
+    *ret = 0;
+    return true;
+}
+
+static bool b_ReadFile(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    const char *name = (const char *)args[0];
+    int ino = fs_lookup(name);
+    if (ino < 0) {
+        noc_os_puts("fs: not found\n");
+        *ret = (u64)-1;
+        return true;
+    }
+    struct fs_inode in;
+    if (fs_stat((u32)ino, &in) != 0) {
+        *ret = (u64)-1;
+        return true;
+    }
+    u64 len = in.size;
+    char *buf = noc_os_alloc((usize)len + 1);
+    if (!buf) {
+        *ret = (u64)-1;
+        return true;
+    }
+    fs_read_file((u32)ino, buf, len);
+    buf[len] = '\0';
+    *ret = (u64)buf;
+    return true;
+}
+
+static bool b_DeleteFile(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    const char *name = (const char *)args[0];
+    if (fs_unlink(name) != 0) {
+        noc_os_puts("fs: not found\n");
+        *ret = (u64)-1;
+        return true;
+    }
+    fs_sync_bitmap();
+    noc_os_puts("fs: deleted\n");
+    *ret = 0;
+    return true;
+}
+
+static bool b_ListDir(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    fs_listdir();
+    *ret = 0;
+    return true;
+}
+
+static bool b_StatFile(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    const char *name = (const char *)args[0];
+    int ino = fs_lookup(name);
+    if (ino < 0) {
+        noc_os_puts("fs: not found\n");
+        *ret = (u64)-1;
+        return true;
+    }
+    struct fs_inode in;
+    fs_stat((u32)ino, &in);
+    char buf[128];
+    sprintk(buf, sizeof(buf), "fs: %s inode=%u size=%u mode=0x%x\n",
+            name, ino, (unsigned)in.size, (unsigned)in.mode);
+    noc_os_puts(buf);
+    *ret = 0;
+    return true;
+}
+
+static bool b_FormatDisk(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    if (fs_format() != 0) {
+        noc_os_puts("fs: format failed\n");
+        *ret = (u64)-1;
+        return true;
+    }
+    if (fs_mount() != 0) {
+        noc_os_puts("fs: remount failed\n");
+        *ret = (u64)-1;
+        return true;
+    }
+    noc_os_puts("fs: formatted and remounted\n");
+    *ret = 0;
+    return true;
+}
+
 #endif /* !NOOS_USER */
 
 const noc_builtin noc_builtins[] = {
@@ -812,6 +953,12 @@ const noc_builtin noc_builtins[] = {
     { "Spawn",      NTYPE_I64,  1, false, b_Spawn },
     { "Ps",         NTYPE_VOID, 0, false, b_Ps },
     { "Demo",       NTYPE_VOID, 0, false, b_Demo },
+    { "SaveFile",   NTYPE_VOID, 2, false, b_SaveFile },
+    { "ReadFile",   NTYPE_STR,  1, false, b_ReadFile },
+    { "DeleteFile", NTYPE_VOID, 1, false, b_DeleteFile },
+    { "ListDir",    NTYPE_VOID, 0, false, b_ListDir },
+    { "StatFile",   NTYPE_VOID, 1, false, b_StatFile },
+    { "FormatDisk", NTYPE_VOID, 0, false, b_FormatDisk },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);

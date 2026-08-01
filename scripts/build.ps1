@@ -213,7 +213,7 @@ function Invoke-Test {
                 '-' { 'minus' }
                 ';' { 'semicolon' }
                 ',' { 'comma' }
-                '.' { 'period' }
+                '.' { 'dot' }
                 '/' { 'slash' }
                 '(' { 'shift-9' }
                 ')' { 'shift-0' }
@@ -226,7 +226,7 @@ function Invoke-Test {
                 '[' { 'bracket_left' }
                 ']' { 'bracket_right' }
                 '<' { 'shift-comma' }
-                '>' { 'shift-period' }
+                '>' { 'shift-dot' }
                 '!' { 'shift-1' }
                 '?' { 'shift-slash' }
                 '_' { 'shift-minus' }
@@ -450,6 +450,38 @@ function Invoke-Test {
         $noise = Get-Log
         if ($noise -match "expected ';'" -or $noise -match 'unknown command') {
             throw 'legacy fallback noise still present in shell output'
+        }
+
+        # ---- M4: filesystem builtins (save/read/stat/list/delete) ----
+        # Format first so a persistent disk image never carries stale files
+        # between runs, keeping this section deterministic.
+        Send-Keys "FormatDisk;`n"
+        if (-not (Wait-LogPattern 'fs: formatted and remounted')) {
+            throw 'FormatDisk did not report success'
+        }
+        Send-Keys "SaveFile(`"hello.txt`", `"Hello FS`");`n"
+        if (-not (Wait-LogPattern 'fs: saved hello\.txt \(8 bytes\)')) {
+            throw 'SaveFile did not report the saved size'
+        }
+        Send-Keys "StatFile(`"hello.txt`");`n"
+        if (-not (Wait-LogPattern 'fs: hello\.txt inode=\d+ size=8 mode=')) {
+            throw 'StatFile did not report the file metadata'
+        }
+        Send-Keys "ListDir;`n"
+        if (-not (Wait-LogPattern 'hello\.txt\s+8 bytes')) {
+            throw 'ListDir did not show hello.txt'
+        }
+        Send-Keys "Print(`"%s`", ReadFile(`"hello.txt`"));`n"
+        if (-not (Wait-LogPattern "`nHello FS")) {
+            throw 'ReadFile did not return the file content'
+        }
+        Send-Keys "DeleteFile(`"hello.txt`");`n"
+        if (-not (Wait-LogPattern 'fs: deleted')) {
+            throw 'DeleteFile did not report success'
+        }
+        Send-Keys "ListDir;`n"
+        if (-not (Wait-LogPattern '\(0 entries\)')) {
+            throw 'ListDir did not show an empty directory after delete'
         }
 
         # ---- M3: user mode & multitasking ----

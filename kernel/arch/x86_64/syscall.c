@@ -1,5 +1,5 @@
-#include "syscall.h"
 #include "sched.h"
+#include "syscall.h"
 #include "pit.h"
 #include "kbd.h"
 #include "vmm.h"

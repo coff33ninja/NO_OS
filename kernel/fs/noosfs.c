@@ -1,11 +1,9 @@
 #include "fs.h"
 #include "ide.h"
 #include "heap.h"
+#include "pit.h"
 #include "printk.h"
 #include "string.h"
-
-#define FS_INODE_DIR 0x4000
-#define FS_INODE_REG 0x8000
 
 #define INODES_PER_BLOCK (FS_BLOCK_SIZE / sizeof(struct fs_inode))
 
@@ -116,7 +114,8 @@ static u32 fs_alloc_inode(void)
 static bool sb_valid(const struct fs_sb *s)
 {
     return memcmp(s->sig, NOOSFS_SIG, 8) == 0 &&
-           s->block_size == FS_BLOCK_SIZE;
+           s->block_size == FS_BLOCK_SIZE &&
+           s->version == NOOSFS_VERSION;
 }
 
 static void sb_write_all(void)
@@ -169,7 +168,7 @@ int fs_format(void)
 
     memset(&sb, 0, sizeof(sb));
     memcpy(sb.sig, NOOSFS_SIG, 8);
-    sb.version = 1;
+    sb.version = NOOSFS_VERSION;
     sb.block_size = FS_BLOCK_SIZE;
     sb.block_count = nblocks;
     sb.bitmap_start = 2;
@@ -217,6 +216,8 @@ int fs_mount(void)
     if (read_any_sb() != 0)
         return -1;
 
+    kfree(cluster_bitmap);
+    kfree(inode_bitmap);
     cluster_bitmap = kmalloc(sb.bitmap_blocks * FS_BLOCK_SIZE);
     inode_bitmap = kmalloc((FS_INODE_COUNT + 7) / 8);
     if (!cluster_bitmap || !inode_bitmap) {
@@ -263,6 +264,272 @@ void fs_sync_bitmap(void)
         return;
     for (u64 b = 0; b < sb.bitmap_blocks; b++)
         disk_write_block(sb.bitmap_start + b, cluster_bitmap + b * FS_BLOCK_SIZE);
+}
+
+/* ---------------- directory helpers ---------------- */
+
+#define DIRENT_PER_BLOCK (FS_BLOCK_SIZE / sizeof(struct fs_dirent))
+
+static struct fs_inode root_cache;
+
+static int root_load(void)
+{
+    return read_inode(sb.root_inode, &root_cache);
+}
+
+static int root_save(void)
+{
+    return write_inode(sb.root_inode, &root_cache);
+}
+
+/* Ensure the root directory has a data cluster to store entries in. */
+static int root_ensure_block(void)
+{
+    if (root_cache.size > 0)
+        return 0;
+    u32 c = fs_alloc_cluster();
+    if (c == (u32)-1)
+        return -1;
+    u8 zero[FS_BLOCK_SIZE];
+    memset(zero, 0, sizeof(zero));
+    if (fs_cluster_write(c, zero) != 0)
+        return -1;
+    root_cache.blocks[0] = c;
+    root_cache.size = FS_BLOCK_SIZE;
+    return root_save();
+}
+
+static int dir_add_entry(const char *name, u32 ino, u8 type)
+{
+    if (root_load() != 0)
+        return -1;
+    usize nlen = strlen(name);
+    if (nlen == 0 || nlen > FS_NAME_MAX)
+        return -1;
+    if (root_ensure_block() != 0)
+        return -1;
+
+    for (u32 bi = 0; bi < FS_MAX_BLOCKS; bi++) {
+        if (root_cache.blocks[bi] == 0)
+            break;
+        struct fs_dirent blk[DIRENT_PER_BLOCK];
+        if (fs_cluster_read(root_cache.blocks[bi], blk) != 0)
+            return -1;
+        for (u32 e = 0; e < DIRENT_PER_BLOCK; e++) {
+            if (blk[e].inode == 0) {
+                memset(&blk[e], 0, sizeof(blk[e]));
+                blk[e].inode = ino;
+                blk[e].reclen = sizeof(struct fs_dirent);
+                blk[e].namelen = (u8)nlen;
+                blk[e].type = type;
+                memcpy(blk[e].name, name, nlen);
+                return fs_cluster_write(root_cache.blocks[bi], blk);
+            }
+        }
+        if (root_cache.blocks[bi] == 0) {
+            /* extend into the next free direct slot */
+            u32 c = fs_alloc_cluster();
+            if (c == (u32)-1)
+                return -1;
+            u8 zero[FS_BLOCK_SIZE];
+            memset(zero, 0, sizeof(zero));
+            if (fs_cluster_write(c, zero) != 0)
+                return -1;
+            root_cache.blocks[bi] = c;
+            root_cache.size += FS_BLOCK_SIZE;
+            return root_save();
+        }
+    }
+    return -1; /* directory full */
+}
+
+/* ---------------- file operations ---------------- */
+
+int fs_create(const char *name, u16 mode)
+{
+    if (!mounted)
+        return -1;
+    if (fs_lookup(name) >= 0)
+        return -1; /* exists */
+    u32 ino = fs_alloc_inode();
+    if (ino == (u32)-1)
+        return -1;
+    struct fs_inode in;
+    memset(&in, 0, sizeof(in));
+    in.mode = mode;
+    in.nlinks = 1;
+    in.mtime = (u32)pit_ticks();
+    if (write_inode(ino, &in) != 0)
+        return -1;
+    if (dir_add_entry(name, ino, mode == FS_INODE_DIR ? DT_DIR : DT_FILE) != 0)
+        return -1;
+    return (int)ino;
+}
+
+int fs_lookup(const char *name)
+{
+    if (!mounted)
+        return -1;
+    if (root_load() != 0)
+        return -1;
+    usize nlen = strlen(name);
+    for (u32 bi = 0; bi < FS_MAX_BLOCKS; bi++) {
+        if (root_cache.blocks[bi] == 0)
+            break;
+        struct fs_dirent blk[DIRENT_PER_BLOCK];
+        if (fs_cluster_read(root_cache.blocks[bi], blk) != 0)
+            return -1;
+        for (u32 e = 0; e < DIRENT_PER_BLOCK; e++) {
+            if (blk[e].inode != 0 && blk[e].namelen == nlen &&
+                memcmp(blk[e].name, name, nlen) == 0)
+                return (int)blk[e].inode;
+        }
+    }
+    return -1;
+}
+
+int fs_write_file(u32 ino, const void *data, u64 size)
+{
+    if (!mounted)
+        return -1;
+    u64 nblocks = (size + FS_BLOCK_SIZE - 1) / FS_BLOCK_SIZE;
+    if (nblocks > FS_MAX_BLOCKS)
+        return -1;
+    struct fs_inode in;
+    if (read_inode(ino, &in) != 0)
+        return -1;
+
+    /* free old data blocks beyond the new length */
+    for (u32 i = (u32)nblocks; i < FS_MAX_BLOCKS; i++) {
+        if (in.blocks[i]) {
+            fs_free_cluster(in.blocks[i]);
+            in.blocks[i] = 0;
+        }
+    }
+    /* allocate and write new data */
+    const u8 *p = (const u8 *)data;
+    for (u32 i = 0; i < nblocks; i++) {
+        if (!in.blocks[i]) {
+            u32 c = fs_alloc_cluster();
+            if (c == (u32)-1)
+                return -1;
+            in.blocks[i] = c;
+        }
+        if (fs_cluster_write(in.blocks[i], p + i * FS_BLOCK_SIZE) != 0)
+            return -1;
+    }
+    in.size = size;
+    in.mtime = (u32)pit_ticks();
+    in.nlinks = 1;
+    in.mode |= FS_INODE_REG;
+    return write_inode(ino, &in);
+}
+
+u64 fs_read_file(u32 ino, void *buf, u64 max)
+{
+    struct fs_inode in;
+    if (read_inode(ino, &in) != 0)
+        return 0;
+    u64 want = in.size < max ? in.size : max;
+    u8 *p = (u8 *)buf;
+    u64 left = want;
+    for (u32 i = 0; left && i < FS_MAX_BLOCKS; i++) {
+        if (!in.blocks[i])
+            break;
+        u64 chunk = left < FS_BLOCK_SIZE ? left : FS_BLOCK_SIZE;
+        if (fs_cluster_read(in.blocks[i], p) != 0)
+            return (u64)(p - (u8 *)buf);
+        p += chunk;
+        left -= chunk;
+    }
+    return want;
+}
+
+int fs_stat(u32 ino, struct fs_inode *out)
+{
+    return read_inode(ino, out);
+}
+
+static int dir_find_slot(const char *name, u32 *block_out, u32 *ent_out)
+{
+    usize nlen = strlen(name);
+    for (u32 bi = 0; bi < FS_MAX_BLOCKS; bi++) {
+        if (root_cache.blocks[bi] == 0)
+            break;
+        struct fs_dirent blk[DIRENT_PER_BLOCK];
+        if (fs_cluster_read(root_cache.blocks[bi], blk) != 0)
+            return -1;
+        for (u32 e = 0; e < DIRENT_PER_BLOCK; e++) {
+            if (blk[e].inode != 0 && blk[e].namelen == nlen &&
+                memcmp(blk[e].name, name, nlen) == 0) {
+                *block_out = bi;
+                *ent_out = e;
+                return 0;
+            }
+        }
+    }
+    return -1;
+}
+
+int fs_unlink(const char *name)
+{
+    if (!mounted)
+        return -1;
+    u32 ino = (u32)fs_lookup(name);
+    if (ino == (u32)-1)
+        return -1;
+    if (root_load() != 0)
+        return -1;
+    u32 bi, e;
+    if (dir_find_slot(name, &bi, &e) != 0)
+        return -1;
+
+    struct fs_inode in;
+    if (read_inode(ino, &in) == 0) {
+        for (u32 i = 0; i < FS_MAX_BLOCKS; i++)
+            if (in.blocks[i])
+                fs_free_cluster(in.blocks[i]);
+    }
+    memset(&in, 0, sizeof(in));
+    write_inode(ino, &in);
+    bit_clr(inode_bitmap, ino);
+
+    struct fs_dirent blk[DIRENT_PER_BLOCK];
+    fs_cluster_read(root_cache.blocks[bi], blk);
+    memset(&blk[e], 0, sizeof(blk[e]));
+    fs_cluster_write(root_cache.blocks[bi], blk);
+    return 0;
+}
+
+int fs_listdir(void)
+{
+    if (!mounted)
+        return -1;
+    if (root_load() != 0)
+        return -1;
+    printk("dir /:\n");
+    u32 count = 0;
+    for (u32 bi = 0; bi < FS_MAX_BLOCKS; bi++) {
+        if (root_cache.blocks[bi] == 0)
+            break;
+        struct fs_dirent blk[DIRENT_PER_BLOCK];
+        if (fs_cluster_read(root_cache.blocks[bi], blk) != 0)
+            continue;
+        for (u32 e = 0; e < DIRENT_PER_BLOCK; e++) {
+            if (blk[e].inode == 0)
+                continue;
+            struct fs_inode in;
+            if (read_inode(blk[e].inode, &in) != 0)
+                continue;
+            char nm[FS_NAME_MAX + 1];
+            memcpy(nm, blk[e].name, blk[e].namelen);
+            nm[blk[e].namelen] = '\0';
+            printk("  %s  %u bytes\n", nm, (unsigned)in.size);
+            count++;
+        }
+    }
+    printk("  (%u entries)\n", count);
+    return count;
 }
 
 /* ---------------- init ---------------- */

@@ -6,3 +6,4 @@ build/
 
 #Ignore vscode AI rules
 .github\instructions\codacy.instructions.md
+docs/AUDIT.md

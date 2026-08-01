@@ -1,6 +1,7 @@
 #include "heap.h"
 #include "pmm.h"
 #include "string.h"
+#include "printk.h"
 
 #define HDR_MAGIC 0x4E4F4F534C4C4F43ULL /* NOOSLLOC */
 
@@ -18,6 +19,42 @@ static usize  block_count;
 static usize align16(usize n)
 {
     return (n + 15) & ~(usize)15;
+}
+
+static void heap_validate(const char *after)
+{
+    usize steps = 0;
+    /* invariant: boot-time builtin struct at 0x152000 must stay 720/allocated */
+    block *fmt = (block *)0x152000;
+    if (fmt->magic == HDR_MAGIC &&
+        (fmt->size != 720 || fmt->free != false)) {
+        printk("heap: BUILTIN-STRUCT CHANGED after %s: size=%u free=%d "
+               "next=%p\n", after, (u32)fmt->size, fmt->free,
+               (void *)fmt->next);
+    }
+    for (block *p = head; p; p = p->next) {
+        if (p->next && (u8 *)p->next < (u8 *)p) {
+            printk("heap: LIST BACKWARD after %s, block=%p next=%p\n",
+                   after, p, (void *)p->next);
+            u8 *raw = (u8 *)p;
+            printk("  fields size=%u magic=%x free=%d\n", (u32)p->size,
+                   (u32)p->magic, p->free);
+            for (int i = 0; i < 96; i += 8)
+                printk("  mem %p: %x %x %x %x  %x %x %x %x\n", raw + i,
+                       raw[i], raw[i + 1], raw[i + 2], raw[i + 3],
+                       raw[i + 4], raw[i + 5], raw[i + 6], raw[i + 7]);
+            return;
+        }
+        if (++steps > 200) {
+            printk("heap: LIST CORRUPT (cycle) after %s, head=%p\n",
+                   after, (void *)head);
+            steps = 0;
+            for (block *q = head; q && steps < 60; q = q->next, steps++)
+                printk("  %p size=%u free=%d next=%p\n", q,
+                       (u32)q->size, q->free, (void *)q->next);
+            return;
+        }
+    }
 }
 
 static bool adjacent(block *a, block *b)
@@ -77,13 +114,17 @@ void *kmalloc(usize size)
 
         b->free = false;
         used_bytes += b->size;
+        heap_validate("kmalloc");
+        printk("heap: kmalloc %u -> %p\n", (u32)size, (void *)(b + 1));
         return (void *)(b + 1);
     }
 
     block *nb = region_alloc(size);
     if (!nb)
         return NULL;
-    return kmalloc(size);
+    void *r = kmalloc(size);
+    heap_validate("kmalloc-return");
+    return r;
 }
 
 void kfree(void *ptr)
@@ -99,23 +140,42 @@ void kfree(void *ptr)
 
     b->free = true;
     used_bytes -= b->size;
-
+    printk("heap: kfree %p size=%u next=%p nextfree=%d\n", ptr,
+           (u32)b->size, (void *)b->next, b->next ? b->next->free : -1);
     /* merge with the next block if adjacent and free */
     if (b->next && b->next->free && adjacent(b, b->next)) {
         b->size += sizeof(block) + b->next->size;
         b->next = b->next->next;
         block_count--;
+        heap_validate("kfree-merge-next");
     }
 
     /* merge with the previous block: find it via linear scan */
-    for (block *p = head; p && p != b; p = p->next) {
-        if (p->next == b && p->free && adjacent(p, b)) {
-            p->size += sizeof(block) + b->size;
-            p->next = b->next;
-            block_count--;
-            break;
+    {
+        u64 guard = 0;
+        void *ring[64];
+        usize ri = 0;
+        for (block *p = head; p && p != b; p = p->next) {
+            ring[ri++ % 64] = p;
+            if (++guard > 100000) {
+                printk("heap: cycle detected freeing %p; trail:\n", ptr);
+                for (usize k = 0; k < 64; k++) {
+                    block *q = ring[(ri + k) % 64];
+                    printk("  [%d] %p size=%u free=%d next=%p\n", (int)k, q,
+                           (u32)q->size, q->free, (void *)q->next);
+                }
+                break;
+            }
+            if (p->next == b && p->free && adjacent(p, b)) {
+                p->size += sizeof(block) + b->size;
+                p->next = b->next;
+                block_count--;
+                heap_validate("kfree-merge-prev");
+                break;
+            }
         }
     }
+    heap_validate("kfree");
 }
 
 usize heap_used_bytes(void) { return used_bytes; }

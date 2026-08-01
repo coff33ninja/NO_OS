@@ -4,13 +4,17 @@
 #include "types.h"
 
 #define NOOSFS_SIG "NO_OSFS\0"
+#define NOOSFS_VERSION 2
 #define FS_BLOCK_SIZE 512
 #define FS_INODE_COUNT 256
 #define FS_NAME_MAX 24
-#define FS_MAX_BLOCKS 8 /* direct blocks per inode */
+#define FS_MAX_BLOCKS 10 /* direct blocks per inode: 5 KiB max file */
 
 #define DT_FILE 1
 #define DT_DIR  2
+
+#define FS_INODE_DIR 0x4000
+#define FS_INODE_REG 0x8000
 
 /* On-disk superblock (1 block). Two copies: LBA 0 and LBA 1. */
 struct fs_sb {
@@ -37,7 +41,7 @@ struct fs_inode {
     u32  mtime;
     u32  flags;
     u32  blocks[FS_MAX_BLOCKS]; /* cluster numbers */
-    u8   reserved[8];
+    u8   reserved[4];
 };
 
 /* Directory entry (32 bytes). */
@@ -61,5 +65,14 @@ bool fs_mounted(void);
 int fs_cluster_write(u32 cluster, const void *buf);
 int fs_cluster_read(u32 cluster, void *buf);
 void fs_sync_bitmap(void);
+
+/* file operations (flat root directory for now) */
+int  fs_create(const char *name, u16 mode);                 /* -> inode or -1 */
+int  fs_lookup(const char *name);                           /* -> inode or -1 */
+int  fs_write_file(u32 ino, const void *data, u64 size);    /* truncate+write */
+u64  fs_read_file(u32 ino, void *buf, u64 max);
+int  fs_stat(u32 ino, struct fs_inode *out);
+int  fs_unlink(const char *name);
+int  fs_listdir(void);                                       /* prints via printk */
 
 #endif

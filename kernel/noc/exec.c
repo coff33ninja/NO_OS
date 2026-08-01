@@ -8,11 +8,13 @@
 static void free_chunk(noc_fn *chunk)
 {
     if (chunk->code) {
+        noc_os_puts("DBG: free code\n");
         noc_os_free(chunk->code);
         chunk->code = NULL;
     }
     for (usize i = 0; i < chunk->nstrings; i++) {
         if (chunk->strings[i]) {
+            noc_os_puts("DBG: free str\n");
             noc_os_free(chunk->strings[i]);
             chunk->strings[i] = NULL;
         }
@@ -83,6 +85,7 @@ bool noc_exec_line(const char *line)
         noc_os_free(arena.base);
         return true;
     }
+    noc_os_puts("DBG: vm-ok\n");
 
     u64 res = 0;
     if (chunk.last_expr && noc_vm_take_result(&res) && res != 0) {
@@ -92,6 +95,8 @@ bool noc_exec_line(const char *line)
     }
 
     free_chunk(&chunk);
+    noc_os_puts("DBG: chunk-freed\n");
     noc_os_free(arena.base);
+    noc_os_puts("DBG: arena-freed\n");
     return true;
 }
