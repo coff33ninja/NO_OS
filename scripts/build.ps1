@@ -709,6 +709,12 @@ function Invoke-Test {
         if (-not (Wait-LogPattern '\[OUT\] IL-PERSIST')) {
             throw 'LogDump did not include the marker output record'
         }
+        if (-not (Wait-LogPattern '\[SPAWN\] 6 user')) {
+            throw 'LogDump did not include the spawn event record'
+        }
+        if (-not (Wait-LogPattern '\[EXIT\] 6 0')) {
+            throw 'LogDump did not include the exit event record'
+        }
         Send-Keys "LogSave;`n"
         if (-not (Wait-LogPattern 'log: saved interact\.log \(\d+ bytes\)')) {
             throw 'LogSave did not persist the interaction log'
@@ -731,6 +737,9 @@ function Invoke-Test {
         Send-Keys "LogDump;`n"
         if (-not (Wait-Appended $base2 '\[CMD\] PrintLn\("IL-PERSIST"\);')) {
             throw 'persisted interaction log did not survive reboot'
+        }
+        if (-not (Wait-Appended $base2 '\[EXIT\] 6 0')) {
+            throw 'persisted event records did not survive reboot'
         }
 
         # Deliberate fault as the final check: #UD must trap, not triple-fault.

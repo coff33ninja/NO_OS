@@ -186,6 +186,29 @@ void il_clear(void)
     il_records = 0;
 }
 
+/* Kernel process events appended straight to the ring, independent of the
+   per-command output capture. */
+void il_event_spawn(u32 pid, const char *name)
+{
+    char rec[64];
+    usize n = sprintk(rec, sizeof(rec), "[SPAWN] %u", (unsigned)pid);
+    if (name && n < sizeof(rec) - 1)
+        rec[n++] = ' ';
+    if (name) {
+        for (usize i = 0; name[i] && n < sizeof(rec) - 1; i++)
+            rec[n++] = name[i];
+    }
+    il_append(rec, n);
+}
+
+void il_event_exit(u32 pid, i64 code)
+{
+    char rec[48];
+    sprintk(rec, sizeof(rec), "[EXIT] %u %lld", (unsigned)pid,
+            (long long)code);
+    il_append(rec, strlen(rec));
+}
+
 void il_stats(char *buf, usize cap)
 {
     sprintk(buf, cap, "log: %u records, %u bytes of %u\n",

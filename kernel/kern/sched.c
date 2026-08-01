@@ -7,6 +7,7 @@
 #include "string.h"
 #include "pit.h"
 #include "pmm.h"
+#include "interact.h"
 
 extern int coro_save(coro_t *out);
 extern void coro_restore(coro_t *in);
@@ -119,6 +120,7 @@ void sched_exit_user(struct regs *r, i64 code)
 {
     current->exit_code = code;
     current->state = TASK_ZOMBIE;
+    il_event_exit(current->pid, code);
     printk("process %u (%s) exited: %d\n",
            (unsigned)current->pid, current->name, (int)code);
     if (current->cr3)
@@ -250,6 +252,7 @@ i64 sched_spawn(const char *code, const char *name)
     t->user        = 1;
     t->heap_used   = 0;
     t->heap_pages  = 0;
+    il_event_spawn((u32)t->pid, name);
     return (i64)t->pid;
 
 fail:

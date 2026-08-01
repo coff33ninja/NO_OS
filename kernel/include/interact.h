@@ -11,6 +11,8 @@
 void il_begin_capture(void);
 void il_capture_putc(char c);
 void il_end_capture(const char *cmd);
+void il_event_spawn(u32 pid, const char *name);
+void il_event_exit(u32 pid, i64 code);
 void il_save(void);
 void il_load(void);
 void il_dump(void);
