@@ -14,6 +14,8 @@
 #define SYS_FREE     8
 #define SYS_YIELD    9
 #define SYS_KBD_PEEK 10
+#define SYS_MODEL_BUDGET 11
+#define SYS_MODEL_COMMIT 12
 
 void syscall_dispatch(struct regs *r);
 

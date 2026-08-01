@@ -692,6 +692,24 @@ static bool b_PageFault(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_ModelBudget(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    *ret = noc_os_model_budget(args[0]);
+    return true;
+}
+
+static bool b_ModelCommit(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    *ret = noc_os_model_commit(args[0]);
+    return true;
+}
+
 static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
 {
     (void)vm;
@@ -699,9 +717,10 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
     (void)n;
     noc_os_puts("commands: Help, Version, MemInfo, Echo, FaultTest, Reboot, "
                 "Print, PrintLn, Sleep, Time, KeyGet, KeyPressed, Alloc, Free, "
-                "MemSet, MemCpy, Len, PageFault, Spawn, Ps, Demo, SaveFile, "
-                "ReadFile, DeleteFile, ListDir, StatFile, FormatDisk, Run, "
-                "Predict, Hist, ClearHist, PgPred\n");
+                "MemSet, MemCpy, Len, PageFault, ModelBudget, ModelCommit, "
+                "Spawn, Ps, Demo, SaveFile, ReadFile, DeleteFile, ListDir, "
+                "StatFile, FormatDisk, Run, Predict, Hist, ClearHist, PgPred, "
+                "ModelInfo\n");
     *ret = 0;
     return true;
 }
@@ -1122,6 +1141,20 @@ static bool b_PgPred(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_ModelInfo(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    task_t *t = sched_current();
+    char buf[96];
+    sprintk(buf, sizeof(buf), "model: budget=%u KB used=%u KB\n",
+            (unsigned)t->model_budget_kb, (unsigned)t->model_weights_kb);
+    noc_os_puts(buf);
+    *ret = 0;
+    return true;
+}
+
 #endif /* !NOOS_USER */
 
 const noc_builtin noc_builtins[] = {
@@ -1137,6 +1170,8 @@ const noc_builtin noc_builtins[] = {
     { "MemCpy",     NTYPE_VOID, 3, false, b_MemCpy },
     { "Len",        NTYPE_I64,  1, false, b_Len },
     { "PageFault",  NTYPE_I64,  1, false, b_PageFault },
+    { "ModelBudget", NTYPE_I64, 1, false, b_ModelBudget },
+    { "ModelCommit", NTYPE_I64, 1, false, b_ModelCommit },
     { "Help",       NTYPE_VOID, 0, false, b_Help },
 #ifndef NOOS_USER
     { "Echo",       NTYPE_VOID, 1, false, b_Echo },
@@ -1158,6 +1193,7 @@ const noc_builtin noc_builtins[] = {
     { "Hist",       NTYPE_VOID, 0, false, b_Hist },
     { "ClearHist",  NTYPE_VOID, 0, false, b_ClearHist },
     { "PgPred",     NTYPE_VOID, 0, false, b_PgPred },
+    { "ModelInfo",  NTYPE_VOID, 0, false, b_ModelInfo },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);

@@ -659,6 +659,34 @@ function Invoke-Test {
             throw 'PgPred did not predict the next page from fault history'
         }
 
+        # ---- M5: model_budget syscall (per-process weight RAM budget) ----
+        # The REPL task defaults to 8192 KB; setting 8 KB and committing 2
+        # weight pages (8 KB) must fit and show in the accounting. A spawned
+        # user process then proves enforcement is per-process: with a 16 KB
+        # budget, committing 3 pages (12 KB) fits (a=0) and 5 more (20 KB) is
+        # rejected (b=-1), which is how the model gracefully degrades.
+        Send-Keys "ModelInfo;`n"
+        if (-not (Wait-LogPattern 'model: budget=8192 KB used=0 KB')) {
+            throw 'ModelInfo did not show the default 8192 KB budget'
+        }
+        Send-Keys "ModelBudget(8);`n"
+        Send-Keys "ModelInfo;`n"
+        if (-not (Wait-LogPattern 'model: budget=8 KB used=0 KB')) {
+            throw 'ModelBudget did not lower the budget to 8 KB'
+        }
+        Send-Keys "ModelCommit(2);`n"
+        Send-Keys "ModelInfo;`n"
+        if (-not (Wait-LogPattern 'model: budget=8 KB used=8 KB')) {
+            throw 'ModelCommit(2) did not account 8 KB of weight pages'
+        }
+        Send-Keys "Spawn(`"ModelBudget(16); PrintLn(\`"a=%d\`", ModelCommit(3)); PrintLn(\`"b=%d\`", ModelCommit(5));`");`n"
+        if (-not (Wait-LogPattern 'a=0')) {
+            throw 'user process commit under budget was not allowed'
+        }
+        if (-not (Wait-LogPattern 'b=-1')) {
+            throw 'user process commit over budget was not rejected'
+        }
+
         # Deliberate fault as the final check: #UD must trap, not triple-fault.
         Send-Keys "FaultTest`n"
         if (-not (Wait-LogPattern 'EXCEPTION: Invalid Opcode')) {

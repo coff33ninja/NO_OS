@@ -18,4 +18,9 @@ int   noc_os_kbd_peek(void); /* next key or -1, non-consuming */
 int   noc_os_kbd_wait(void); /* blocking */
 void  noc_os_exit(int code);
 
+/* M5: model weight RAM budget. Kernel side: direct task state. User side:
+   int 0x80 syscalls. */
+u64   noc_os_model_budget(u64 kb);
+u64   noc_os_model_commit(u64 pages);
+
 #endif

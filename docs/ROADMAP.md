@@ -79,6 +79,10 @@ _(persists the NOC corpus and the trained model across reboot)_
 - [ ] Model weights are shared read-only pages, demand-paged from disk and
       evictable under pressure; `model_budget(n)` syscall enforces a hard
       memory cap per LLM process
+  - [x] `model_budget` syscall: per-process weight RAM budget (default
+        8192 KB), `ModelBudget`/`ModelCommit`/`ModelInfo` builtins; commits
+        over budget are rejected so the model degrades gracefully
+  - [ ] Demand-paged read-only weight pages, evictable under pressure
 - [ ] Byte-level micro-transformer (~1-10M params, 8-bit) trained on the NOC
       command history; runs as a sandboxed user-mode process
 - [ ] Self-evolution loop: log interactions -> idle retrain -> model drafts

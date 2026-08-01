@@ -4,6 +4,7 @@
 #include "kbd.h"
 #include "serial.h"
 #include "vga.h"
+#include "sched.h"
 
 void *noc_os_alloc(usize n)
 {
@@ -59,4 +60,23 @@ void noc_os_exit(int code)
     (void)code;
     for (;;)
         __asm__ volatile("hlt");
+}
+
+u64 noc_os_model_budget(u64 kb)
+{
+    task_t *t = sched_current();
+    if (kb > 65536)
+        kb = 65536;
+    t->model_budget_kb = (u32)kb;
+    return kb;
+}
+
+u64 noc_os_model_commit(u64 pages)
+{
+    task_t *t = sched_current();
+    u64 need = pages * 4; /* 4 KiB per weight page */
+    if ((u64)t->model_weights_kb + need > (u64)t->model_budget_kb)
+        return (u64)-1;
+    t->model_weights_kb += (u32)need;
+    return 0;
 }

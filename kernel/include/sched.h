@@ -33,6 +33,8 @@ typedef struct {
     u8          on_key;     /* blocked waiting for a key */
     usize       heap_used;  /* user heap bump cursor (bytes) */
     usize       heap_pages; /* user heap pages mapped */
+    u32         model_budget_kb;  /* model weight RAM cap, default 8192 */
+    u32         model_weights_kb; /* committed weight pages (KB) */
     i64         exit_code;
     coro_t      coro;       /* kernel task (task 0) coroutine context */
 } task_t;

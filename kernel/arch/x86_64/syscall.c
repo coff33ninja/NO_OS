@@ -96,6 +96,24 @@ void syscall_dispatch(struct regs *r)
     case SYS_YIELD:
         sched_preempt(r);
         break;
+    case SYS_MODEL_BUDGET: {
+        u64 kb = a1;
+        if (kb > 65536)
+            kb = 65536;
+        t->model_budget_kb = (u32)kb;
+        r->rax = kb;
+        break;
+    }
+    case SYS_MODEL_COMMIT: {
+        u64 need = a1 * 4; /* 4 KiB per weight page */
+        if ((u64)t->model_weights_kb + need > (u64)t->model_budget_kb) {
+            r->rax = (u64)-1; /* over budget: caller must degrade gracefully */
+        } else {
+            t->model_weights_kb += (u32)need;
+            r->rax = 0;
+        }
+        break;
+    }
     default:
         r->rax = (u64)-1;
         break;

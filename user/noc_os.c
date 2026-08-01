@@ -11,6 +11,8 @@
 #define SYS_FREE     8
 #define SYS_YIELD    9
 #define SYS_KBD_PEEK 10
+#define SYS_MODEL_BUDGET 11
+#define SYS_MODEL_COMMIT 12
 
 /* int 0x80 preserves every GPR except rax (the return value). Arg 1 in rdi. */
 static u64 do_sys(u64 num, u64 arg)
@@ -73,4 +75,14 @@ void noc_os_exit(int code)
     do_sys(SYS_EXIT, (u64)code);
     for (;;)
         __asm__ volatile("hlt");
+}
+
+u64 noc_os_model_budget(u64 kb)
+{
+    return do_sys(SYS_MODEL_BUDGET, kb);
+}
+
+u64 noc_os_model_commit(u64 pages)
+{
+    return do_sys(SYS_MODEL_COMMIT, pages);
 }

@@ -164,6 +164,7 @@ void sched_init(void)
     tasks[0].kstack      = kmalloc(TASK_KSTACK_SIZE);
     tasks[0].kstack_size = TASK_KSTACK_SIZE;
     tasks[0].cr3         = 0;
+    tasks[0].model_budget_kb = 8192;
 
     current = &tasks[0];
     tss_set_rsp0((u64)tasks[0].kstack + TASK_KSTACK_SIZE);
@@ -184,6 +185,7 @@ i64 sched_spawn(const char *code, const char *name)
     if (t->kstack)
         kfree(t->kstack);
     memset(t, 0, sizeof(task_t));
+    t->model_budget_kb = 8192;
 
     u64 cr3 = vmm_new_address_space();
     if (!cr3)
