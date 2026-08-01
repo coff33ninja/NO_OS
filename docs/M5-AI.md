@@ -153,21 +153,33 @@ The kernel append-logs to `/var/interact.log` (pre-allocated circular buffer):
 > table and make the ` ` transition (digit vs `P`) a coin flip.
 
 > **Status (slice 8):** the accept criterion is closed — a model-drafted
-> NOC program is syntax-gated, spawned sandboxed, and its result reaches
-> the shell. `DraftRun(<seed>);` (`kernel/noc/vm.c`) completes the seed
-> through `train_generate`, stops at the first newline, then
-> `noc_check_syntax()` (`kernel/noc/exec.c` — lex+parse+compile, never
-> run) rejects malformed drafts, and `sched_spawn` launches the accepted
-> program as a ring-3 user process whose `SYS_PUTS` output lands on the
-> serial log. Verified against `TrainReset; LogClear;` + five
-> `PrintLn("DRAFT-OK");` + `Train;` + `DraftRun("PrintLn(\"DRAFT-OK\"");`:
-> the seed is a balanced string (closing quote included) so generation
-> only adds the unambiguous `")->` ; `->` \n` tail of the `[CMD]` record;
-> the draft prints as `draft: PrintLn("DRAFT-OK");`, spawns (`draft:
-> spawned pid 1`), and the bare `DRAFT-OK` output line reaches the shell.
-> Seeding past the closing quote deliberately skips the `K` transition,
-> where the `[TICK]` records' `K`->`]` and the `[OUT]` records' `K`->`\n`
-> would both out-vote the close-quote `K`->`"`.
+> NOC program is transformer-first with a bigram fallback, syntax-gated,
+> spawned sandboxed, and its result reaches the shell. `DraftRun(<seed>);`
+> (`kernel/noc/vm.c`) completes the seed through the micro-transformer
+> first (`trans_generate`, printed as `draft: trans: ...`); if that draft
+> is empty or fails `noc_check_syntax()` (`kernel/noc/exec.c` —
+> lex+parse+compile, never run), the byte-bigram model (`train_generate`,
+> `draft: bigram: ...`) supplies the completion — so a hallucinated draft
+> is rejected instead of executed and the loop works before any
+> transformer training (degrading gracefully on small hardware). Generation
+> stops at the first newline. `sched_spawn` launches the accepted program
+> as a ring-3 user process whose `SYS_PUTS` output lands on the serial log
+> and back into the interaction log, and the next `TransTrain("evolve", ...)`
+> retrains over that drafted output — draft -> run -> log -> retrain.
+> Verified against `TrainReset; TransReset; LogClear;` + five
+> `PrintLn("DRAFT-OK");` + `Train;` + `TransTrain("draft", 4);` +
+> `DraftRun("PrintLn(\"DRAFT-OK\"");`: the seed is a balanced string
+> (closing quote included) so generation only adds the unambiguous
+> `")-> ; -> \n` tail of the `[CMD]` record; the poorly-trained transformer
+> emits a one-byte draft (`draft: trans: [`) that fails the gate, the
+> bigram completes the tail (`draft: bigram: );`), the draft prints as
+> `draft: PrintLn("DRAFT-OK");`, spawns (`draft: spawned pid 1`), and the
+> bare `DRAFT-OK` output line reaches the shell. The follow-up
+> `TransTrain("evolve", 1)` runs over the log that now includes the drafted
+> program's output (`trans: train evolve (1 passes, ...)`), closing the
+> self-evolution loop. Seeding past the closing quote deliberately skips
+> the `K` transition, where the `[TICK]` records' `K`->`]` and the `[OUT]`
+> records' `K`->`\n` would both out-vote the close-quote `K`->`"`.
 
 > **Status (slice 9):** the corpus is now versioned and rollback-safe
 > (`kernel/noc/corpus.c`). `DraftRun` persists each accepted draft to
@@ -224,6 +236,23 @@ The kernel append-logs to `/var/interact.log` (pre-allocated circular buffer):
 > threshold (mirrors `TrainIdle`); `trans_info` now reports `idle=N s`.
 > Harness-verified: threshold lowered to 1 s, fresh corpus typed, and the
 > `trans: train idle (...)` line fired automatically without any command.
+>
+> **Status (prefetch action):** the page-access predictor now has its
+> action half — it is no longer a passive observer. The page-fault
+> dispatcher (`kernel/arch/x86_64/isr.c:isr_dispatch`) feeds every
+> model-window fault into the predictor (`pgpred_fault`) and then asks
+> `model_prefetch` (`kernel/mm/model.c:model_prefetch`) to pre-load the
+> page it expects next: if the prediction is another model page, not yet
+> resident, and within the task's `model_budget`, it is faulted in up front
+> so the next access is a hit instead of a fault. Harness-verified: with
+> `PgPredClear;`, a cold `pg=0 -> pg=1 -> pg=2` read sequence builds the
+> 0->1, 1->2 history; `ModelEvict(1); ModelEvict(2)` drops the followers; a
+> fresh fault on pg=1 re-learns it and the predictor (last=1 -> follower 2)
+> expects pg=2 — non-resident — so the prefetch action faults it in
+> (`model: prefetch pg=2 resident=3 used=12 KB`) and the follow-up read of
+> pg=2 hits instead of faulting (`PREFETCH-OK`), proving the pre-load.
+> Like the demand-fault path, a prefetch beyond budget is denied
+> (`model: prefetch pg=N denied (budget M KB)`) so the cap still holds.
 
 ### 4.3. Model Updates
 - New weights written to temporary file

@@ -28,6 +28,12 @@ bool model_demand_fault(task_t *t, u64 cr2, u64 err);
 bool model_evict_page(task_t *t, usize pg);
 u32  model_resident_pages(const task_t *t);
 
+/* Prefetch action: after a model-window fault is handled, ask the page-access
+   predictor which page it expects next and pre-load it if it is another model
+   page, not resident, and within budget. No-op when the prediction is out of
+   window / already resident / denied. */
+void model_prefetch(task_t *t);
+
 /* Current resident model window size in pages (derived from the weight
    blob). */
 u32  model_window_pages(void);

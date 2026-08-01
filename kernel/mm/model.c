@@ -2,6 +2,7 @@
 #include "vmm.h"
 #include "pmm.h"
 #include "trans.h"
+#include "pgpred.h"
 #include "string.h"
 #include "printk.h"
 #include "heap.h"
@@ -107,6 +108,23 @@ static void model_page_set(task_t *t, usize pg, bool resident)
         *w &= ~bit;
 }
 
+/* Copy the canonical weight page into a fresh frame, map it read-only in the
+   task, charge the budget. Shared by the demand-fault path and the prefetch
+   action below. Returns false on allocation failure (caller reports). */
+static bool model_fault_in_page(task_t *t, usize pg)
+{
+    u64 frame = pmm_alloc_frame();
+    if (!frame)
+        return false;
+    const u8 *weights = trans_weights();
+    memcpy((void *)frame, weights + pg * MODEL_PG, MODEL_PG);
+    vmm_map(t->cr3, USER_MODEL_BASE + pg * MODEL_PG, frame, VMM_USER);
+    t->model_frames[pg] = frame;
+    model_page_set(t, pg, true);
+    t->model_weights_kb += 4;
+    return true;
+}
+
 /* Service a user page fault on the model region. Only not-present faults
    are demand-paging requests; a present fault means a write to a read-only
    model page and is refused (the caller kills the task). Returns true when
@@ -132,22 +150,49 @@ bool model_demand_fault(task_t *t, u64 cr2, u64 err)
         return false;
     }
 
-    u64 frame = pmm_alloc_frame();
-    if (!frame) {
+    if (!model_fault_in_page(t, pg)) {
         printk("model: pg %u out of frames\n", (unsigned)pg);
         return false;
     }
-
-    const u8 *weights = trans_weights();
-    memcpy((void *)frame, weights + pg * MODEL_PG, MODEL_PG);
-    vmm_map(t->cr3, USER_MODEL_BASE + pg * MODEL_PG, frame, VMM_USER);
-    t->model_frames[pg] = frame;
-    model_page_set(t, pg, true);
-    t->model_weights_kb += 4;
     t->model_faults++;
     printk("model: fault-in pg=%u resident=%u used=%u KB\n", (unsigned)pg,
            (unsigned)model_resident_pages(t), (unsigned)t->model_weights_kb);
     return true;
+}
+
+/* Prefetch action (ROADMAP: "pre-map/pre-load the predicted page"): asked by
+   the page-fault dispatcher after a model-window demand fault is handled.
+   Asks the page-access predictor which page it expects next; if that page is
+   another model page, not yet resident, and within budget, pre-load it so the
+   next access is a hit instead of a fault. Prints what it did; no-op when the
+   prediction is out of window, already resident, or denied. */
+void model_prefetch(task_t *t)
+{
+    u64 p = pgpred_predict();
+    if (!p)
+        return;
+    u64 vaddr = p << 12;
+    if (!model_in_range(vaddr))
+        return;
+    usize pg = (usize)((vaddr - USER_MODEL_BASE) / MODEL_PG);
+    if (pg >= win_pages)
+        return;
+    if (!model_ensure_task(t, win_pages))
+        return;
+    if (model_page_resident(t, pg))
+        return; /* already resident: nothing to prefetch */
+
+    if ((u64)t->model_weights_kb + 4 > (u64)t->model_budget_kb) {
+        printk("model: prefetch pg=%u denied (budget %u KB)\n", (unsigned)pg,
+               (unsigned)t->model_budget_kb);
+        return;
+    }
+    if (!model_fault_in_page(t, pg)) {
+        printk("model: prefetch pg=%u out of frames\n", (unsigned)pg);
+        return;
+    }
+    printk("model: prefetch pg=%u resident=%u used=%u KB\n", (unsigned)pg,
+           (unsigned)model_resident_pages(t), (unsigned)t->model_weights_kb);
 }
 
 /* Explicitly evict a resident model page: unmap, free the frame, refund the

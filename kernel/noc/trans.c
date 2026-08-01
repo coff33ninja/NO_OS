@@ -1022,8 +1022,8 @@ u32 trans_train(const char *why, usize max_bytes, usize max_passes)
         return 0;
     const u8 *toks = (const u8 *)batch + (nb - (C + 2));
     usize passes = max_passes ? max_passes : 1;
-    if (passes > 4)
-        passes = 4;
+    if (passes > 64)
+        passes = 64;
 
     for (usize p = 0; p < passes; p++)
         train_pass(toks, C);

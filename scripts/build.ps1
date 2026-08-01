@@ -668,6 +668,43 @@ function Invoke-Test {
             throw 'PgPred did not predict the next page from fault history'
         }
 
+        # ---- M5: page prefetch (prefetcher action half) ----
+        # The demand-fault hook feeds the predictor and then pre-loads the
+        # predicted page. Only genuine faults reach the hook (resident reads
+        # never fault), so build the bigram history with cold faults on pg=0,
+        # pg=1, pg=2 (0->1, 1->2), then evict pg=1 and pg=2. A fresh fault on
+        # pg=1 re-learns it, and the predictor (last=1 -> follower 2) expects
+        # pg=2 -- non-resident now -- so the prefetch action must fault it in
+        # with its own line. The follow-up read of pg=2 then hits instead of
+        # faulting (no second fault-in), proving the pre-load worked.
+        Send-Keys "PgPredClear;`n"
+        if (-not (Wait-LogPattern 'pgpred: cleared')) {
+            throw 'PgPredClear did not clear the fault history'
+        }
+        $baseP = Get-Log
+        Send-Keys "Spawn(`"Str S = Alloc(2); MemCpy(S, 0x100F1000000, 1); MemCpy(S, 0x100F1001000, 1); MemCpy(S, 0x100F1002000, 1); ModelEvict(1); ModelEvict(2); MemCpy(S, 0x100F1001000, 1); MemCpy(S, 0x100F1002000, 1); PrintLn(\`"PREFETCH-OK\`");`");`n"
+        if (-not (Wait-Appended $baseP 'model: fault-in pg=0 resident=1 used=4 KB')) {
+            throw 'prefetch seed read pg=0 did not fault in'
+        }
+        if (-not (Wait-Appended $baseP 'model: fault-in pg=1 resident=2 used=8 KB')) {
+            throw 'prefetch seed read pg=1 did not fault in'
+        }
+        if (-not (Wait-Appended $baseP 'model: fault-in pg=2 resident=3 used=12 KB')) {
+            throw 'prefetch seed read pg=2 did not fault in'
+        }
+        if (-not (Wait-Appended $baseP 'model: evict pg=1 resident=2 used=8 KB')) {
+            throw 'ModelEvict did not evict the predicted follower context'
+        }
+        if (-not (Wait-Appended $baseP 'model: evict pg=2 resident=1 used=4 KB')) {
+            throw 'ModelEvict did not evict the predicted page'
+        }
+        if (-not (Wait-Appended $baseP 'model: prefetch pg=2 resident=3 used=12 KB')) {
+            throw 'the prefetch action did not pre-load the predicted page'
+        }
+        if (-not (Wait-Appended $baseP '(?m)PREFETCH-OK$')) {
+            throw 'the prefetch target was not resident on the follow-up read'
+        }
+
         # ---- M5: model_budget syscall (per-process weight RAM budget) ----
         # The REPL task defaults to 8192 KB; setting 8 KB and committing 2
         # weight pages (8 KB) must fit and show in the accounting. A spawned
@@ -841,19 +878,28 @@ function Invoke-Test {
             throw 'PredictBigram did not generate the expected continuation'
         }
 
-        # Slice 8: model-drafted NOC program. Reset the model, build a
-        # controlled corpus of PrintLn("DRAFT-OK"); x5, then DraftRun with
-        # the seed PrintLn("DRAFT-OK" (balanced string, closing quote already
-        # in the seed) so generation only adds ');' -- the unambiguous
-        # CMD-record tail "->) -> ; -> \n. Seeding past the closing quote
-        # skips the K transition, where the [TICK] records' K->] (7) and the
-        # [OUT] records' K->\n (5) would both out-vote the close-quote K->"
-        # (5). The draft is syntax-checked, spawns as a ring-3 user process,
-        # and its output reaches the shell as a bare DRAFT-OK line.
+        # Slice 8: model-drafted NOC program, transformer-first. Reset both
+        # models and build a controlled corpus of PrintLn("DRAFT-OK"); x5, then
+        # train BOTH the byte-bigram (Train; -- the reliable generator) and the
+        # transformer (TransTrain -- the strongest model). DraftRun seeds
+        # PrintLn("DRAFT-OK" (balanced string, closing quote already in the
+        # seed) so generation only adds ');' -- the unambiguous CMD-record tail
+        # "->) -> ; -> \n. DraftRun consults the transformer first: its
+        # (poorly-trained) draft is printed as "draft: trans:" and fails the
+        # syntax gate, so the bigram fallback completes the seed ("draft:
+        # bigram: );") and the valid draft is spawned as a ring-3 user process
+        # whose output reaches the shell as a bare DRAFT-OK line. That output
+        # lands back in the interaction log, and the follow-up TransTrain
+        # retrains on it -- the draft -> run -> log -> retrain self-evolution
+        # loop.
         $baseR = Get-Log
         Send-Keys "TrainReset;`n"
         if (-not (Wait-Appended $baseR 'model: reset')) {
             throw 'TrainReset did not reset the model'
+        }
+        Send-Keys "TransReset;`n"
+        if (-not (Wait-Appended $baseR 'trans: reset')) {
+            throw 'TransReset did not reset the transformer'
         }
         $baseC = Get-Log
         Send-Keys "LogClear;`n"
@@ -873,8 +919,19 @@ function Invoke-Test {
         if (-not (Wait-Appended $baseT2 'train: ok \(\d+ passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)')) {
             throw 'Train did not run on the draft corpus'
         }
+        $baseT3 = Get-Log
+        Send-Keys "TransTrain(`"draft`", 4);`n"
+        if (-not (Wait-Appended $baseT3 'trans: train draft \(4 passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)' 30)) {
+            throw 'TransTrain did not run on the draft corpus'
+        }
         $baseN = Get-Log
         Send-Keys "DraftRun(`"PrintLn(`\`"DRAFT-OK`\`"`");`n"
+        if (-not (Wait-Appended $baseN 'draft: trans: [^\r\n]+')) {
+            throw 'DraftRun did not consult the transformer first'
+        }
+        if (-not (Wait-Appended $baseN 'draft: bigram: \);')) {
+            throw 'DraftRun did not fall back to the bigram generator'
+        }
         if (-not (Wait-Appended $baseN 'draft: PrintLn\("DRAFT-OK"\);')) {
             throw 'DraftRun did not print the completed draft'
         }
@@ -883,6 +940,13 @@ function Invoke-Test {
         }
         if (-not (Wait-Appended $baseN '(?m)DRAFT-OK$')) {
             throw 'the spawned draft output did not reach the shell'
+        }
+        # Self-evolution: the drafted program's output records are now in the
+        # interaction log; retraining must absorb them into the transformer.
+        $baseE = Get-Log
+        Send-Keys "TransTrain(`"evolve`", 1);`n"
+        if (-not (Wait-Appended $baseE 'trans: train evolve \(1 passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)' 30)) {
+            throw 'the evolve retrain did not train over the drafted output'
         }
 
         # Slice 9: versioned, rollback-safe generation corpus. Every
@@ -905,6 +969,10 @@ function Invoke-Test {
         $corpFile = 'corp{0:d4}.noc' -f $seqNext
 
         # Fresh controlled corpus, then a successful draft of PrintLn("CORP-OK");.
+        # DraftRun still consults the transformer first here (it holds the
+        # slice-8 weights, so its draft is non-empty but fails the syntax
+        # gate), then the bigram fallback completes the seed deterministically
+        # so the corpus commit stays stable.
         $baseR = Get-Log
         Send-Keys "TrainReset;`n"
         if (-not (Wait-Appended $baseR 'model: reset')) {
@@ -1169,7 +1237,7 @@ function Invoke-Test {
 
         $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
         Write-Host $content
-        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), bigram generation from the trained model, model-drafted NOC program spawned as a ring-3 user process with output reaching the shell, demand-paged read-only transformer weight pages (fault-in, write-trap, budget eviction/refault), deterministic fixed-point transformer training/eval (TransTrain/TransEval/TransReset), transformer idle auto-retrain (TransIdle trigger fires), and fault trapping all verified'
+        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), bigram generation from the trained model, model-drafted NOC program driven transformer-first (micro-transformer consulted, bigram fallback) and spawned as a ring-3 user process with output reaching the shell and feeding back into the retrain loop, versioned rollback-safe generation corpus, demand-paged read-only transformer weight pages (fault-in, write-trap, budget eviction/refault), page prefetch pre-loading the predicted page from fault history, deterministic fixed-point transformer training/eval (TransTrain/TransEval/TransReset), transformer idle auto-retrain (TransIdle trigger fires), and fault trapping all verified'
         exit 0
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }

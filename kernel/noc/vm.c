@@ -751,7 +751,7 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
                 "MemSet, MemCpy, Len, PageFault, ModelBudget, ModelCommit, "
                 "ModelTouch, ModelEvict, ModelStats, "
                 "Spawn, Ps, Demo, SaveFile, ReadFile, DeleteFile, ListDir, "
-                "StatFile, FormatDisk, Run, Predict, Hist, ClearHist, PgPred, "
+                "StatFile, FormatDisk, Run, Predict, Hist, ClearHist, PgPred, PgPredClear, "
                 "ModelInfo, LogInfo, LogDump, LogSave, LogClear, "
                 "Train, TrainIdle, TrainReset, PredictBigram, DraftRun, "
                 "CorpusInfo, CorpusRollback, "
@@ -1177,6 +1177,17 @@ static bool b_PgPred(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
+static bool b_PgPredClear(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    pgpred_clear();
+    noc_os_puts("pgpred: cleared\n");
+    *ret = 0;
+    return true;
+}
+
 static bool b_ModelInfo(void *vm, u64 *args, usize n, u64 *ret)
 {
     (void)vm;
@@ -1256,11 +1267,17 @@ static bool b_PredictBigram(void *vm, u64 *args, usize n, u64 *ret)
     return true;
 }
 
-/* DraftRun(<seed>): the model completes the seed with its trained bigram
-   into a NOC program, which is syntax-checked and, if valid, spawned as a
-   ring-3 user process whose output reaches the shell. This is the M5
-   "model drafts NOC code -> runs sandboxed" step: generation stops at the
-   first newline so the draft is a single logical command line. */
+/* DraftRun(<seed>): the model completes the seed into a NOC program, which
+   is syntax-checked and, if valid, spawned as a ring-3 user process whose
+   output reaches the shell. This is the M5 "model drafts NOC code -> runs
+   sandboxed" step: generation stops at the first newline so the draft is a
+   single logical command line. The strongest model drives the completion
+   first -- the micro-transformer (trans_generate) -- and the byte-bigram
+   model (train_generate) is the fallback whenever the transformer's draft is
+   empty or does not parse, so DraftRun works before any transformer training
+   and degrades gracefully on small hardware. The chosen source is printed as
+   "draft: <prog>" so the loop is observable, and a malformed draft is
+   rejected instead of executed. */
 static bool b_DraftRun(void *vm, u64 *args, usize n, u64 *ret)
 {
     (void)vm;
@@ -1276,16 +1293,50 @@ static bool b_DraftRun(void *vm, u64 *args, usize n, u64 *ret)
     for (usize i = 0; i < sl; i++)
         prog[i] = seed[i];
     usize o = sl;
-    usize cont = train_generate(prog + o, sizeof(prog) - o - 1, seed, sl);
+    bool used = false;
+
+    usize cont = trans_generate(prog + o, sizeof(prog) - o - 1, seed, sl);
     for (usize i = 0; i < cont; i++) {
         if (prog[o + i] == '\n') {
             cont = i;
             break;
         }
     }
-    o += cont;
-    prog[o] = '\0';
+    noc_os_puts("draft: trans: ");
+    if (cont) {
+        for (usize i = 0; i < cont; i++)
+            noc_os_putc(prog[o + i]);
+        noc_os_putc('\n');
+        prog[o + cont] = '\0';
+        used = noc_check_syntax(prog) != 0;
+        if (used)
+            o += cont;
+    } else {
+        noc_os_puts("(empty)\n");
+    }
 
+    if (!used) {
+        prog[o] = '\0';
+        cont = train_generate(prog + o, sizeof(prog) - o - 1, seed, sl);
+        for (usize i = 0; i < cont; i++) {
+            if (prog[o + i] == '\n') {
+                cont = i;
+                break;
+            }
+        }
+        noc_os_puts("draft: bigram: ");
+        if (cont) {
+            for (usize i = 0; i < cont; i++)
+                noc_os_putc(prog[o + i]);
+            noc_os_putc('\n');
+            prog[o + cont] = '\0';
+            o += cont;
+        } else {
+            noc_os_puts("(empty)\n");
+        }
+    }
+
+    prog[o] = '\0';
     noc_os_puts("draft: ");
     noc_os_puts(prog);
     noc_os_putc('\n');
@@ -1516,6 +1567,7 @@ const noc_builtin noc_builtins[] = {
     { "Hist",       NTYPE_VOID, 0, false, b_Hist },
     { "ClearHist",  NTYPE_VOID, 0, false, b_ClearHist },
     { "PgPred",     NTYPE_VOID, 0, false, b_PgPred },
+    { "PgPredClear", NTYPE_VOID, 0, false, b_PgPredClear },
     { "ModelInfo",  NTYPE_VOID, 0, false, b_ModelInfo },
     { "LogInfo",    NTYPE_VOID, 0, false, b_LogInfo },
     { "LogDump",    NTYPE_VOID, 0, false, b_LogDump },

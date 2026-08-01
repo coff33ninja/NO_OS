@@ -81,8 +81,14 @@ _(persists the NOC corpus and the trained model across reboot)_
   - [x] Page-access predictor core: bigram over the page-fault stream
         (`PgPred;`), fed by the page-fault dispatcher; `PageFault(addr);`
         deliberately faults a spawned user process for testing
-  - [ ] Prefetch action (pre-map/pre-load the predicted page) once demand
-        paging / swap exist
+  - [x] Prefetch action (pre-map/pre-load the predicted page): after each
+        model-window demand fault, the dispatcher asks the predictor for the
+        next page and pre-loads it (`model_prefetch`, `kernel/mm/model.c`)
+        when it is another model page, non-resident, and within budget —
+        harness-verified: a cold 0->1->2 fault sequence, evict of 1 and 2,
+        then a fresh fault on 1 makes the predictor expect 2, which is
+        faulted in by the prefetch action (`model: prefetch pg=2`) so the
+        follow-up read of 2 hits instead of faulting
 - [x] Model weights are shared read-only pages, demand-paged and evictable
       under pressure; `model_budget(n)` syscall enforces a hard memory cap
       per LLM process
@@ -120,7 +126,7 @@ _(persists the NOC corpus and the trained model across reboot)_
         threshold (default 30 s) AND >= 64 new log bytes past the watermark;
         `TransIdle(<secs>);` lowers the trigger for testing and `trans_info`
         reports `idle=N s` (harness-verified auto-fire)
-- [ ] Self-evolution loop: log interactions -> idle retrain -> model drafts
+- [x] Self-evolution loop: log interactions -> idle retrain -> model drafts
       NOC code -> runs sandboxed -> output feeds the (versioned,
       rollback-safe) corpus
   - [x] Persistent interaction log: every REPL command captured as
@@ -146,17 +152,25 @@ _(persists the NOC corpus and the trained model across reboot)_
         and the lowest byte wins). The `[TICK]` record carries a fixed
         token (not the wall-clock tick value) so the corpus -- and every
         generation -- is timing-independent.
-  - [x] Model-drafted NOC program, syntax-gated and spawned sandboxed:
-        `DraftRun(<seed>);` completes the seed through the trained bigram,
-        validates the result with `noc_check_syntax` (lex+parse+compile,
-        no run) so a hallucinated draft is rejected instead of executed,
-        then `sched_spawn`s it as a ring-3 user process whose output lands
-        in the shell. Verified against a controlled corpus of
-        `PrintLn("DRAFT-OK");` x5: seed `PrintLn("DRAFT-OK"` (balanced
-        string, closing quote in the seed) completes deterministically to
-        `PrintLn("DRAFT-OK");`, spawns, and the bare `DRAFT-OK` reaches the
-        shell. (Held-out evaluation is a later slice; SGD training is
-        harness-verified via `TransTrain` above.)
+  - [x] Model-drafted NOC program, transformer-first with a bigram
+        fallback, syntax-gated and spawned sandboxed: `DraftRun(<seed>);`
+        completes the seed with the micro-transformer first
+        (`trans_generate`, logged as `draft: trans:`), and if that draft is
+        empty or fails `noc_check_syntax` (lex+parse+compile, no run), the
+        byte-bigram generator (`train_generate`, logged as `draft: bigram:`)
+        supplies the completion — so a hallucinated draft is rejected
+        instead of executed and the loop works before any transformer
+        training. The accepted program is `sched_spawn`ed as a ring-3 user
+        process whose output lands in the shell and back into the
+        interaction log, and the next `TransTrain("evolve")` retrains over
+        it (draft -> run -> log -> retrain). Verified against a controlled
+        corpus of `PrintLn("DRAFT-OK");` x5 + `Train;` +
+        `TransTrain("draft", 4)`: seed `PrintLn("DRAFT-OK"` (balanced
+        string, closing quote in the seed) yields `draft: trans: [` — the
+        poorly-trained transformer's draft fails the gate — then `draft:
+        bigram: );`, the full `draft: PrintLn("DRAFT-OK");` spawns, the
+        bare `DRAFT-OK` reaches the shell, and `TransTrain("evolve", 1)`
+        absorbs the drafted output. (Held-out evaluation is a later slice.)
   - [x] Versioned, rollback-safe corpus: `DraftRun` writes accepted drafts to
         `corpNNNN.noc` with a `@@ GENERATED:` metadata header and advances
         the version (`CorpusInfo;`); a rejected (syntax-failing) draft leaves

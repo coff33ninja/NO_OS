@@ -63,8 +63,11 @@ void isr_dispatch(u64 vector, u64 error, struct regs *r)
                 u64 cr2;
                 __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
                 if (model_demand_fault(t, cr2, error)) {
-                    /* Demand-paged a read-only model weight page in; retry
-                       the faulting instruction with the page now mapped. */
+                    /* Demand-paged a read-only model weight page in; feed the
+                       page-access predictor and pre-load the page it expects
+                       next, then retry the faulting instruction. */
+                    pgpred_fault(cr2);
+                    model_prefetch(t);
                     return;
                 }
                 printk("process %u (%s) killed: %s (rip=0x%llx err=0x%llx)\n",
