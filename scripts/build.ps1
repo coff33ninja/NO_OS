@@ -60,6 +60,7 @@ $csrcs = @(
     'noc\exec.c'
     'noc\predict.c'
     'noc\interact.c'
+    'noc\train.c'
     'mm\pmm.c'
     'mm\heap.c'
     'mm\vmm.c'
@@ -742,6 +743,53 @@ function Invoke-Test {
             throw 'persisted event records did not survive reboot'
         }
 
+        # ---- M5: idle-retrain loop (byte-bigram model) ----
+        # Train; forces a pass over the interaction log and reports the
+        # integer fixed-point cross-entropy loss. The model accumulates
+        # counts, so consecutive passes over an already-seen corpus reach a
+        # deterministic fixed point (loss is invariant under count doubling)
+        # rather than strictly decreasing -- assert stability/determinism
+        # instead. TrainIdle lowers the idle trigger threshold so the harness
+        # can prove the auto-retrain fires without waiting 30 s.
+        $baseT = Get-Log
+        Send-Keys "Train;`n"
+        if (-not (Wait-Appended $baseT 'train: ok \(\d+ passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)')) {
+            throw 'Train did not run and report a loss'
+        }
+        $c1 = Get-Log
+        $m1 = [regex]::Match($c1.Substring($baseT.Length), 'loss=(\d+\.\d+)')
+        if (-not $m1.Success) { throw 'could not read the first training loss' }
+        $loss1 = [double]$m1.Groups[1].Value
+
+        $baseT = Get-Log
+        Send-Keys "Train;`n"
+        if (-not (Wait-Appended $baseT 'train: ok \(\d+ passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)')) {
+            throw 'second Train did not run'
+        }
+        $c2 = Get-Log
+        $m2 = [regex]::Match($c2.Substring($baseT.Length), 'loss=(\d+\.\d+)')
+        if (-not $m2.Success) { throw 'could not read the second training loss' }
+        $loss2 = [double]$m2.Groups[1].Value
+        if ([math]::Abs($loss2 - $loss1) -gt 0.15) {
+            throw "training loss was not stable across identical retrains ($loss1 -> $loss2)"
+        }
+
+        Send-Keys "ModelInfo;`n"
+        if (-not (Wait-LogPattern 'model: trained [0-9]+ passes, [0-9]+ bytes, loss=\d+\.\d+ bits/byte, idle=\d+ s')) {
+            throw 'ModelInfo did not report byte-model stats'
+        }
+
+        $baseT = Get-Log
+        Send-Keys "TrainIdle(1);`n"
+        if (-not (Wait-Appended $baseT 'train: idle threshold 1 s')) {
+            throw 'TrainIdle did not set the idle threshold'
+        }
+        $baseI = Get-Log
+        Start-Sleep -Seconds 2   # sit idle past the 1 s threshold
+        if (-not (Wait-Appended $baseI 'train: idle \(\d+ passes, \d+ bytes, loss=\d+\.\d+ bits/byte\)')) {
+            throw 'idle retrain did not fire after the idle threshold elapsed'
+        }
+
         # Deliberate fault as the final check: #UD must trap, not triple-fault.
         Send-Keys "FaultTest`n"
         if (-not (Wait-LogPattern 'EXCEPTION: Invalid Opcode')) {
@@ -750,7 +798,7 @@ function Invoke-Test {
 
         $content = Get-Content -Raw $log -ErrorAction SilentlyContinue
         Write-Host $content
-        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, and fault trapping all verified'
+        Write-Host 'TEST PASS: boot self-test, NOC shell (bare commands, history, ctrl-c, interrupt), filesystem persistence across reboot, interaction log persistence, idle byte-model retraining (deterministic fixed point; auto-trigger fires), and fault trapping all verified'
         exit 0
     } finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }

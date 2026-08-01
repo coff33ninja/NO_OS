@@ -16,6 +16,7 @@
 #include "fs.h"
 #include "noc.h"
 #include "interact.h"
+#include "train.h"
 
 static void fs_selftest(void)
 {
@@ -179,6 +180,7 @@ void kmain(u32 mb_info)
     kbd_echo_test();
 
     il_load();
+    train_init();
 
     noc_repl();
 

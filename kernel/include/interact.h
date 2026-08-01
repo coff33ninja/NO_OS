@@ -19,4 +19,9 @@ void il_dump(void);
 void il_clear(void);
 void il_stats(char *buf, usize cap);
 
+/* Training accessors: current byte count, and a copy of the tail window
+   (contiguous; the ring is shift-compacted, not circular). */
+usize il_len_bytes(void);
+usize il_copy_tail(char *dst, usize cap);
+
 #endif

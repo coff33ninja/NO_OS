@@ -95,7 +95,15 @@ _(persists the NOC corpus and the trained model across reboot)_
         `LogSave;` writes a 4 KiB checkpoint to `interact.log` (flat FS,
         no `/var/` yet) that is restored at boot — the training corpus
         survives reboot
-  - [ ] Idle retrain loop feeding the micro-transformer from the log
+  - [x] Idle retrain loop feeding the micro-transformer from the log:
+        a byte-bigram model (64 KiB of 8-bit weights, `kernel/noc/train.c`)
+        polls from the keyboard idle loop, auto-retrains when the machine
+        has been idle past a threshold (default 30 s) and >= 64 new log
+        bytes have arrived; `Train;` forces a pass and reports integer
+        fixed-point cross-entropy loss, `TrainIdle(<secs>);` lowers the
+        trigger for testing, `ModelInfo` shows lifetime stats. (Real
+        transformer, held-out evaluation, and model-drafted code deferred
+        to later M5 work.)
 - [ ] Accept: the model predicts the next command from history; a
       model-drafted NOC program runs and its result shows in the shell
 

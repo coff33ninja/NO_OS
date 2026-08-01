@@ -120,6 +120,21 @@ The kernel append-logs to `/var/interact.log` (pre-allocated circular buffer):
 - **Steps**: 1-4 gradient updates per trigger (keeps latency <100ms)
 - **Precision**: 8-bit weights, 16-bit activations (simulated via integer ops)
 
+> **Status (slice 6):** implemented as a byte-bigram model in
+> `kernel/noc/train.c` — 64 KiB of 8-bit weights (`w[65536]`) accumulated
+> over the interaction log with count capping at 255 and a per-pass halving
+> (learning-rate-decay analogue) when a row saturates. The idle trigger is
+> polled from `kbd_readc`'s input-wait loop (`train_poll_idle`, default
+> `TrainIdle` threshold 30 s, only fires when ≥64 new log bytes arrived).
+> `Train;` forces a pass and reports integer fixed-point cross-entropy loss
+> (millibits/byte, 16-entry log2 table, error <0.5%); `TrainIdle(<secs>);`
+> lowers the threshold for testing; `ModelInfo` shows lifetime pass/byte/loss
+> stats. Verified by the boot-test harness (deterministic loss fixed point
+> across identical retrains, idle auto-retrain fires). Deviations from spec
+> (deferred to later M5 work): count-based bigram rather than a
+> transformer, 1-4 fixed passes rather than SGD steps, `≥64` new bytes
+> rather than `≥1024`, no held-out validation yet.
+
 ### 4.3. Model Updates
 - New weights written to temporary file
 - On successful validation: atomic swap with current model file

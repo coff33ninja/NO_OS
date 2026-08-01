@@ -214,3 +214,20 @@ void il_stats(char *buf, usize cap)
     sprintk(buf, cap, "log: %u records, %u bytes of %u\n",
             (unsigned)il_records, (unsigned)il_len, (unsigned)IL_RING_SIZE);
 }
+
+usize il_len_bytes(void)
+{
+    return il_len;
+}
+
+/* The ring is shift-compacted on eviction (memmove), so the tail window is
+   always contiguous in il_ring. Copy the most recent `cap` bytes into dst. */
+usize il_copy_tail(char *dst, usize cap)
+{
+    if (!dst || cap == 0 || il_len == 0)
+        return 0;
+    if (cap > il_len)
+        cap = il_len;
+    memcpy(dst, il_ring + il_len - cap, cap);
+    return cap;
+}

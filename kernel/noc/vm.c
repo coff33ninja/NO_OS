@@ -11,6 +11,7 @@
 #include "predict.h"
 #include "pgpred.h"
 #include "interact.h"
+#include "train.h"
 #endif
 
 #define NOC_STACK_SIZE 4096
@@ -721,7 +722,8 @@ static bool b_Help(void *vm, u64 *args, usize n, u64 *ret)
                 "MemSet, MemCpy, Len, PageFault, ModelBudget, ModelCommit, "
                 "Spawn, Ps, Demo, SaveFile, ReadFile, DeleteFile, ListDir, "
                 "StatFile, FormatDisk, Run, Predict, Hist, ClearHist, PgPred, "
-                "ModelInfo, LogInfo, LogDump, LogSave, LogClear\n");
+                "ModelInfo, LogInfo, LogDump, LogSave, LogClear, "
+                "Train, TrainIdle\n");
     *ret = 0;
     return true;
 }
@@ -1152,6 +1154,31 @@ static bool b_ModelInfo(void *vm, u64 *args, usize n, u64 *ret)
     sprintk(buf, sizeof(buf), "model: budget=%u KB used=%u KB\n",
             (unsigned)t->model_budget_kb, (unsigned)t->model_weights_kb);
     noc_os_puts(buf);
+    train_stats(buf, sizeof(buf));
+    noc_os_puts(buf);
+    *ret = 0;
+    return true;
+}
+
+static bool b_Train(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    (void)args;
+    (void)n;
+    train_run("ok", 4096, 0);
+    *ret = 0;
+    return true;
+}
+
+static bool b_TrainIdle(void *vm, u64 *args, usize n, u64 *ret)
+{
+    (void)vm;
+    if (n < 1)
+        return false;
+    u32 secs = train_set_idle_secs((u32)args[0]);
+    char buf[64];
+    sprintk(buf, sizeof(buf), "train: idle threshold %u s\n", (unsigned)secs);
+    noc_os_puts(buf);
     *ret = 0;
     return true;
 }
@@ -1242,6 +1269,8 @@ const noc_builtin noc_builtins[] = {
     { "LogDump",    NTYPE_VOID, 0, false, b_LogDump },
     { "LogSave",    NTYPE_VOID, 0, false, b_LogSave },
     { "LogClear",   NTYPE_VOID, 0, false, b_LogClear },
+    { "Train",      NTYPE_VOID, 0, false, b_Train },
+    { "TrainIdle",  NTYPE_VOID, 1, false, b_TrainIdle },
 #endif
 };
 usize noc_nbuiltins = sizeof(noc_builtins) / sizeof(noc_builtins[0]);
